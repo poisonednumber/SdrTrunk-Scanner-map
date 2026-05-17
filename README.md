@@ -97,9 +97,26 @@ source .venv/bin/activate   # Linux
 node bot.js
 ```
 
+### Manual contributor setup
+If you're developing locally without the installer scripts:
+
+```bash
+npm install
+python -m venv .venv
+source .venv/bin/activate   # Linux
+# .venv\Scripts\Activate.ps1  # Windows PowerShell
+pip install -r requirements.txt
+cp .env.example .env
+npm start
+```
+
+Use `.env.example` as the committed template and keep real secrets only in your local `.env`.
+
 ---
 
 ## ⚙️ Configuration
+
+Copy `.env.example` to `.env` and fill in your environment-specific values. Do not commit real `.env` files, API keys, or storage credentials.
 
 All main settings are in `.env`. Key options:
 

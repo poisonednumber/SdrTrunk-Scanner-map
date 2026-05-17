@@ -1,0 +1,9 @@
+boto3
+faster-whisper
+icad-tone-detection
+numpy
+pydub
+python-dotenv
+torch
+torchaudio
+torchvision

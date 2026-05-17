@@ -1,0 +1,15 @@
+.env
+.venv/
+node_modules/
+audio/
+data/
+logs/
+combined.log
+error.log
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+*.pyc
+__pycache__/
