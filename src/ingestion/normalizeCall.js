@@ -78,11 +78,12 @@ function enrichTrunkRecorderFields(fields = {}) {
   return enriched;
 }
 
-function normalizeTrunkRecorderCall(fields = {}, fileInfo = {}) {
+function normalizeTrunkRecorderCall(fields = {}, fileInfo = {}, options = {}) {
   const enriched = enrichTrunkRecorderFields(fields);
+  const provider = options.provider || 'trunk-recorder';
 
   return {
-    provider: 'trunk-recorder',
+    provider,
     filename: fileInfo.originalFilename || enriched.filename || '',
     talkGroupID: enriched.talkgroup || enriched.talk_group_id || enriched.talkGroupID || '',
     systemName: enriched.system || enriched.systemName || enriched.systemLabel || '',
@@ -93,14 +94,18 @@ function normalizeTrunkRecorderCall(fields = {}, fileInfo = {}) {
     talkerAlias: enriched.talkerAlias || '',
     frequency: enriched.frequency || enriched.freq || '',
     metadata: enriched,
-    isTrunkRecorder: true
+    isTrunkRecorder: provider === 'trunk-recorder'
   };
 }
 
 function normalizeIncomingCall({ source, fields = {}, fileInfo = {} } = {}) {
   if (source === 'sdrtrunk') return normalizeSdrTrunkCall(fields, fileInfo);
-  if (source === 'trunk-recorder' || source === 'rdio-scanner') {
+  if (source === 'trunk-recorder') {
     return normalizeTrunkRecorderCall(fields, fileInfo);
+  }
+
+  if (source === 'rdio-scanner') {
+    return normalizeTrunkRecorderCall(fields, fileInfo, { provider: 'rdio-scanner' });
   }
 
   return normalizeTrunkRecorderCall(fields, fileInfo);

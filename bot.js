@@ -1,6 +1,9 @@
 // bot.js - Main Discord bot application with integrated webserver and initialization
 
 require('dotenv').config();
+const { loadConfig } = require('./src/config');
+const { applyMigrations } = require('./src/db/migrations');
+const { normalizeIncomingCall } = require('./src/ingestion/normalizeCall');
 
 // Get environment variables first, before any usage
 const {
@@ -68,6 +71,15 @@ const {
   TONE_FREQUENCY_BAND,
   TONE_TIME_RESOLUTION_MS
 } = process.env;
+
+const startupConfig = loadConfig(process.env);
+if (!startupConfig.isValid) {
+  console.error('FATAL: Invalid configuration:');
+  for (const error of startupConfig.errors) {
+    console.error(`- ${error.key}: ${error.message}`);
+  }
+  process.exit(1);
+}
 
 // --- VALIDATE AI-RELATED ENV VARS ---
 if (!AI_PROVIDER) {
@@ -944,92 +956,17 @@ function ensureApiKey() {
 }
 
 // Function to initialize database tables
-function initializeDatabase() {
-  return new Promise((resolve, reject) => {
-    logger.info('Initializing database tables...');
-    
-    db.serialize(() => {
-      let tablesCreated = 0;
-      let totalTables = ENABLE_AUTH?.toLowerCase() === 'true' ? 7 : 5;
-      
-      const tableCreated = (err, tableName) => {
-        if (err) {
-          logger.error(`Error creating ${tableName} table:`, err);
-          reject(err);
-          return;
-        }
-        tablesCreated++;
-        if (tablesCreated === totalTables) {
-          logger.info('Database tables initialized successfully.');
-          resolve();
-        }
-      };
-
-      db.run(`CREATE TABLE IF NOT EXISTS transcriptions (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        talk_group_id TEXT,
-        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-        transcription TEXT,
-        audio_file_path TEXT,
-        address TEXT,
-        lat REAL,
-        lon REAL,
-        category TEXT
-      )`, (err) => tableCreated(err, 'transcriptions'));
-
-      db.run(`CREATE TABLE IF NOT EXISTS global_keywords (
-        keyword TEXT UNIQUE,
-        talk_group_id TEXT
-      )`, (err) => tableCreated(err, 'global_keywords'));
-
-      db.run(`CREATE TABLE IF NOT EXISTS talk_groups (
-        id TEXT PRIMARY KEY,
-        hex TEXT,
-        alpha_tag TEXT,
-        mode TEXT,
-        description TEXT,
-        tag TEXT,
-        county TEXT
-      )`, (err) => tableCreated(err, 'talk_groups'));
-
-      db.run(`CREATE TABLE IF NOT EXISTS frequencies (
-        id INTEGER PRIMARY KEY,
-        frequency TEXT,
-        description TEXT
-      )`, (err) => tableCreated(err, 'frequencies'));
-
-      db.run(`CREATE TABLE IF NOT EXISTS audio_files (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        transcription_id INTEGER,
-        audio_data BLOB,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY(transcription_id) REFERENCES transcriptions(id)
-      )`, (err) => tableCreated(err, 'audio_files'));
-
-      // Authentication tables (if auth is enabled)
-      if (ENABLE_AUTH?.toLowerCase() === 'true') {
-        db.run(`CREATE TABLE IF NOT EXISTS users (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          username TEXT UNIQUE NOT NULL,
-          password_hash TEXT NOT NULL,
-          salt TEXT NOT NULL,
-          created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        )`, (err) => tableCreated(err, 'users'));
-
-        db.run(`CREATE TABLE IF NOT EXISTS sessions (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          user_id INTEGER NOT NULL,
-          token TEXT UNIQUE NOT NULL,
-          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-          expires_at DATETIME NOT NULL,
-          last_activity DATETIME DEFAULT CURRENT_TIMESTAMP,
-          ip_address TEXT,
-          user_agent TEXT,
-          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-        )`, (err) => tableCreated(err, 'sessions'));
-      }
-    });
+async function initializeDatabase() {
+  logger.info('Initializing database tables...');
+  const applied = await applyMigrations(db, {
+    enableAuth: ENABLE_AUTH?.toLowerCase() === 'true'
   });
+
+  if (applied.length > 0) {
+    logger.info(`Applied database migrations: ${applied.join(', ')}`);
+  } else {
+    logger.info('Database schema already up to date.');
+  }
 }
 
 // Function to create admin user if authentication is enabled
@@ -1456,18 +1393,24 @@ app.post('/api/call-upload', (req, res) => {
             
             logger.info(`Received SDRTrunk audio: ${customFilename}`);
             
+            const normalizedCall = normalizeIncomingCall({
+              source: 'sdrtrunk',
+              fields,
+              fileInfo
+            });
+
             handleNewAudio({
               filename: customFilename,
               path: saveTo,
-              talkGroupID: fields.talkgroup,
-              systemName: fields.systemLabel,
-              talkGroupName: fields.talkgroupLabel,
-              dateTime: fields.dateTime, // Pass the original fields.dateTime for SDRTrunk
-              source: fields.source,
-              talkerAlias: fields.talkerAlias, // Add talkerAlias field from SDRTrunk
-              frequency: fields.frequency,
-              talkGroupGroup: fields.talkgroupGroup,
-              isTrunkRecorder: false
+              talkGroupID: normalizedCall.talkGroupID,
+              systemName: normalizedCall.systemName,
+              talkGroupName: normalizedCall.talkGroupName,
+              dateTime: normalizedCall.dateTime,
+              source: normalizedCall.source,
+              talkerAlias: normalizedCall.talkerAlias,
+              frequency: normalizedCall.frequency,
+              talkGroupGroup: normalizedCall.talkGroupGroup,
+              isTrunkRecorder: normalizedCall.isTrunkRecorder
             });
             
             return sendResponse(200, 'Call imported successfully.');
@@ -1781,17 +1724,26 @@ app.post('/api/call-upload', (req, res) => {
             // Log fields before passing to handleNewAudio
             logger.info(`[UPLOAD] Preparing to call handleNewAudio, fields.srcList=${fields.srcList ? (typeof fields.srcList === 'string' ? `string(${fields.srcList.length} chars)` : `object`) : 'null/undefined'}, fields.freqList=${fields.freqList ? 'exists' : 'null/undefined'}`);
             
+            const normalizedCall = normalizeIncomingCall({
+              source: inferredSourceSystem === 'rdio-scanner' ? 'rdio-scanner' : 'trunk-recorder',
+              fields: {
+                ...fields,
+                dateTime: Math.floor(callDateTime.getTime() / 1000)
+              },
+              fileInfo
+            });
+
             handleNewAudio({
               filename: customFilename,
               path: saveTo,
-              talkGroupID: fields.talkgroup,
-              systemName: fields.systemLabel,
-              talkGroupName: fields.talkgroupLabel,
+              talkGroupID: normalizedCall.talkGroupID,
+              systemName: normalizedCall.systemName,
+              talkGroupName: normalizedCall.talkGroupName,
               dateTime: Math.floor(callDateTime.getTime() / 1000), // Pass Unix timestamp (seconds)
-              source: fields.source,
-              talkerAlias: fields.talkerAlias, // <-- OTA alias from Trunk Recorder
-              frequency: fields.frequency,
-              talkGroupGroup: fields.talkgroupGroup,
+              source: normalizedCall.source,
+              talkerAlias: normalizedCall.talkerAlias, // <-- OTA alias from Trunk Recorder
+              frequency: normalizedCall.frequency,
+              talkGroupGroup: normalizedCall.talkGroupGroup,
               // Detect TrunkRecorder more reliably: check for TrunkRecorder-specific fields
               isTrunkRecorder: inferredSourceSystem === 'TrunkRecorder' || 
                                (fields.srcList && fields.srcList.trim() !== '' && fields.srcList.trim() !== '[]') ||

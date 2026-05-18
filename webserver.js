@@ -1,6 +1,7 @@
 // webserver.js - Web interface for viewing and managing calls with optional authentication
 
 require('dotenv').config();
+const { loadConfig } = require('./src/config');
 const AWS = require('aws-sdk'); // Add AWS SDK
 
 const express = require('express');
@@ -41,6 +42,15 @@ const {
   OLLAMA_URL = 'http://localhost:11434',
   OLLAMA_MODEL = 'llama3.1:8b'
 } = process.env;
+
+const startupConfig = loadConfig(process.env);
+if (!startupConfig.isValid) {
+  console.error('ERROR: Invalid configuration:');
+  for (const error of startupConfig.errors) {
+    console.error(`- ${error.key}: ${error.message}`);
+  }
+  process.exit(1);
+}
 
 // Validate required environment variables
 const requiredVars = ['WEBSERVER_PORT', 'PUBLIC_DOMAIN'];

@@ -47,3 +47,16 @@ test('normalizeTrunkRecorderCall extracts source and alias from meta srcList', (
   assert.equal(call.talkerAlias, 'Unit 12');
   assert.equal(call.frequency, 853000000);
 });
+
+test('normalizeIncomingCall preserves rdio-scanner as a non-TrunkRecorder provider', () => {
+  const call = normalizeIncomingCall({
+    source: 'rdio-scanner',
+    fields: {
+      talkgroup: '3001',
+      dateTime: '2026-05-17T12:00:00Z'
+    }
+  });
+
+  assert.equal(call.provider, 'rdio-scanner');
+  assert.equal(call.isTrunkRecorder, false);
+});
