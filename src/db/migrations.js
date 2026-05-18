@@ -36,7 +36,7 @@ const BASE_MIGRATIONS = [
         transcription_id INTEGER,
         audio_data BLOB,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY(transcription_id) REFERENCES transcriptions(id)
+        FOREIGN KEY(transcription_id) REFERENCES transcriptions(id) ON DELETE SET NULL
       )`
     ]
   },
@@ -63,6 +63,31 @@ const BASE_MIGRATIONS = [
         user_agent TEXT,
         FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
       )`
+    ]
+  },
+  {
+    id: '003_create_call_jobs',
+    statements: [
+      `CREATE TABLE IF NOT EXISTS call_jobs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        transcription_id INTEGER,
+        job_type TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        attempts INTEGER NOT NULL DEFAULT 0,
+        max_attempts INTEGER NOT NULL DEFAULT 3,
+        priority INTEGER NOT NULL DEFAULT 0,
+        run_after DATETIME,
+        payload_json TEXT,
+        result_json TEXT,
+        last_error TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        started_at DATETIME,
+        completed_at DATETIME,
+        FOREIGN KEY(transcription_id) REFERENCES transcriptions(id)
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_call_jobs_status_priority ON call_jobs (status, priority DESC, created_at ASC)`,
+      `CREATE INDEX IF NOT EXISTS idx_call_jobs_transcription_type ON call_jobs (transcription_id, job_type)`
     ]
   }
 ];

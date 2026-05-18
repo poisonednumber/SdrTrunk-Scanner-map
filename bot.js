@@ -4,6 +4,13 @@ require('dotenv').config();
 const { loadConfig } = require('./src/config');
 const { applyMigrations } = require('./src/db/migrations');
 const { normalizeIncomingCall } = require('./src/ingestion/normalizeCall');
+const {
+  JOB_TYPES,
+  createProcessingJob,
+  markJobCompleted,
+  markJobFailed,
+  markJobProcessing
+} = require('./src/jobs/processingJobs');
 
 // Get environment variables first, before any usage
 const {
@@ -2901,6 +2908,12 @@ function handleNewAudio(audioData) {
     phase2_tdma,
     color_code
   } = audioData;
+
+  const safelyUpdateProcessingJob = (actionDescription, updateFn) => {
+    updateFn().catch((jobError) => {
+      logger.warn(`Could not ${actionDescription}: ${jobError.message}`);
+    });
+  };
   
   // Log srcList for debugging
   logger.info(`[handleNewAudio] Received audio data for ${filename}, srcList=${srcList ? (typeof srcList === 'string' ? `string(${srcList.substring(0, 100)}...)` : `object`) : 'null/undefined'}, isTrunkRecorder=${isTrunkRecorder}`);
@@ -3011,7 +3024,7 @@ function handleNewAudio(audioData) {
     db.run(
       `INSERT INTO transcriptions (talk_group_id, timestamp, transcription, audio_file_path, address, lat, lon) VALUES (?, ?, ?, ?, NULL, NULL, NULL)`,
       [talkGroupID, unixTimestampSeconds, '', storagePath], // Use the Unix timestamp
-      function (err) {
+      async function (err) {
         if (err) {
           logger.error(`Error inserting initial transcription record for ${filename}:`, err);
           // If DB insert fails, delete the temp file
@@ -3022,7 +3035,24 @@ function handleNewAudio(audioData) {
         }
 
         const transcriptionId = this.lastID; // Get the ID from the database insert
+        let transcriptionJobId = null;
         logger.info(`Created transcription record ID ${transcriptionId} using storage path: ${storagePath}`);
+
+        try {
+          transcriptionJobId = await createProcessingJob(db, {
+            transcriptionId,
+            jobType: JOB_TYPES.TRANSCRIPTION,
+            payload: {
+              filename,
+              talkGroupID,
+              transcriptionMode: effectiveTranscriptionMode,
+              storageMode: STORAGE_MODE
+            }
+          });
+          logger.info(`Created transcription job ${transcriptionJobId} for transcription ID ${transcriptionId}`);
+        } catch (jobError) {
+          logger.warn(`Could not create transcription job for ID ${transcriptionId}: ${jobError.message}`);
+        }
 
         // Conditionally insert audio blob for Listen Live feature (local storage only)
         if (STORAGE_MODE !== 's3') {
@@ -3164,6 +3194,12 @@ function handleNewAudio(audioData) {
                   logger.warn(warningMsg);
                   updateTranscription(transcriptionId, "", async () => {
                     logger.info(`Updated DB with empty transcription for ID ${transcriptionId}`);
+                    if (transcriptionJobId) {
+                      safelyUpdateProcessingJob('mark transcription job completed', () => markJobCompleted(db, transcriptionJobId, {
+                        empty: true,
+                        reason: 'no_transcription'
+                      }));
+                    }
                     
                     // *** IMPORTANT: Check for two-tone even with empty transcription ***
                     // Tone files might contain only tones without voice content
@@ -3234,6 +3270,12 @@ function handleNewAudio(audioData) {
                       });
                     });
                   }
+                  if (transcriptionJobId) {
+                    safelyUpdateProcessingJob('mark transcription job completed', () => markJobCompleted(db, transcriptionJobId, {
+                      empty: false,
+                      transcriptionLength: transcriptionText.length
+                    }));
+                  }
                   logger.info(`Successfully processed: ${filename}`);
                 });
             };
@@ -3241,6 +3283,9 @@ function handleNewAudio(audioData) {
 
             // --- Choose transcription method based on mode ---
             logger.info(`Initiating transcription for ID ${transcriptionId} using mode: ${effectiveTranscriptionMode}`);
+            if (transcriptionJobId) {
+              safelyUpdateProcessingJob('mark transcription job processing', () => markJobProcessing(db, transcriptionJobId));
+            }
 
             if (effectiveTranscriptionMode === 'openai') {
                 // OpenAI API transcription mode
@@ -3373,6 +3418,9 @@ function handleNewAudio(audioData) {
               logger.error(`Error uploading audio to S3 for transcription ID ${transcriptionId} (key: ${storagePath}):`, s3Err);
               }
               // If S3 upload fails, should we delete the DB record?
+              if (transcriptionJobId) {
+                safelyUpdateProcessingJob('mark transcription job failed', () => markJobFailed(db, transcriptionJobId, s3Err));
+              }
               db.run('DELETE FROM transcriptions WHERE id = ?', [transcriptionId], () => {});
               fs.unlink(tempPath, (errUnlink) => { // Delete temp file on S3 error
                   if (errUnlink) logger.error(`Error deleting temp file after S3 upload error ${tempPath}:`, errUnlink);
@@ -3390,6 +3438,9 @@ function handleNewAudio(audioData) {
               if (renameErr) {
                   logger.error(`Error moving temp file ${tempPath} to final location ${finalLocalPath}:`, renameErr);
                   // If rename fails, delete DB record and original temp file
+                  if (transcriptionJobId) {
+                    safelyUpdateProcessingJob('mark transcription job failed', () => markJobFailed(db, transcriptionJobId, renameErr));
+                  }
                   db.run('DELETE FROM transcriptions WHERE id = ?', [transcriptionId], () => {});
                   fs.unlink(tempPath, (errUnlink) => {
                       if (errUnlink) logger.error(`Error deleting temp file after rename error ${tempPath}:`, errUnlink);
