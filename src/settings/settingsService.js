@@ -175,6 +175,45 @@ async function resolveSettings(db, env = process.env) {
   return { settings, secrets };
 }
 
+async function getRuntimeSetting(db, key, env = process.env) {
+  const definition = SETTING_DEFINITIONS[key];
+  if (!definition) return undefined;
+
+  const row = await get(db, 'SELECT value FROM app_settings WHERE key = ? AND is_secret = 0', [key]);
+  if (row && row.value !== undefined && row.value !== null) return row.value;
+  if (env[definition.envKey] !== undefined && env[definition.envKey] !== '') return env[definition.envKey];
+  return definition.defaultValue;
+}
+
+async function getRuntimeSecret(db, key, options = {}) {
+  const definition = SECRET_DEFINITIONS[key];
+  if (!definition) return undefined;
+
+  const env = options.env || process.env;
+  const row = await get(db, 'SELECT value FROM app_settings WHERE key = ? AND is_secret = 1', [key]);
+  if (row && row.value) {
+    const instanceSecret = getInstanceSecret({ env });
+    return decryptSecret(row.value, instanceSecret);
+  }
+
+  return env[definition.envKey] || '';
+}
+
+async function getRuntimeConfig(db, env = process.env) {
+  const settings = {};
+  const secrets = {};
+
+  for (const key of Object.keys(SETTING_DEFINITIONS)) {
+    settings[key] = await getRuntimeSetting(db, key, env);
+  }
+
+  for (const key of Object.keys(SECRET_DEFINITIONS)) {
+    secrets[key] = await getRuntimeSecret(db, key, { env });
+  }
+
+  return { settings, secrets };
+}
+
 async function saveSettings(db, values, actor = 'admin') {
   const results = {};
 
@@ -269,6 +308,9 @@ module.exports = {
   decryptSecret,
   encryptSecret,
   getInstanceSecret,
+  getRuntimeConfig,
+  getRuntimeSecret,
+  getRuntimeSetting,
   getSetupStatus,
   resolveSettings,
   saveSecret,

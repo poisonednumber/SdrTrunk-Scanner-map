@@ -6,6 +6,7 @@ const { applyMigrations } = require('./src/db/migrations');
 const { getJobSummary, getRecentJobs } = require('./src/jobs/processingJobs');
 const {
   getSetupStatus,
+  getRuntimeConfig,
   markSetupComplete,
   resolveSettings,
   saveSecret,
@@ -91,25 +92,30 @@ if (LOCATIONIQ_API_KEY) {
 const app = express();
 app.use(express.json()); // Add this line to parse JSON bodies
 
-app.get('/api/config/google-api-key', (req, res) => {
-  res.json({ apiKey: GOOGLE_MAPS_API_KEY });
+app.get('/api/config/google-api-key', async (req, res) => {
+  const runtime = await getResolvedRuntimeConfig();
+  res.json({ apiKey: runtime.secrets.googleMapsApiKey });
 });
 
 // Add endpoint to serve LocationIQ API key
-app.get('/api/config/locationiq-api-key', (req, res) => {
-  res.json({ apiKey: LOCATIONIQ_API_KEY });
+app.get('/api/config/locationiq-api-key', async (req, res) => {
+  const runtime = await getResolvedRuntimeConfig();
+  res.json({ apiKey: runtime.secrets.locationIqApiKey });
 });
 
 // Add endpoint to serve all geocoding configuration
-app.get('/api/config/geocoding', (req, res) => {
+app.get('/api/config/geocoding', async (req, res) => {
+  const runtime = await getResolvedRuntimeConfig();
+  const googleMapsApiKey = runtime.secrets.googleMapsApiKey;
+  const locationIqApiKey = runtime.secrets.locationIqApiKey;
   res.json({
     google: {
-      available: !!GOOGLE_MAPS_API_KEY,
-      apiKey: GOOGLE_MAPS_API_KEY
+      available: !!googleMapsApiKey,
+      apiKey: googleMapsApiKey
     },
     locationiq: {
-      available: !!LOCATIONIQ_API_KEY,
-      apiKey: LOCATIONIQ_API_KEY
+      available: !!locationIqApiKey,
+      apiKey: locationIqApiKey
     }
   });
 });
@@ -188,6 +194,11 @@ const dbReady = applyMigrations(db, { enableAuth: true })
   .catch((err) => {
     console.error('[Webserver] Error initializing database schema:', err);
   });
+
+async function getResolvedRuntimeConfig() {
+  await dbReady;
+  return getRuntimeConfig(db, process.env);
+}
 
 // Helper Functions for Authentication
 function hashPassword(password, salt) {
@@ -271,6 +282,12 @@ Transmission: "${transcript}"
 Category:`;
 
     let category = 'OTHER'; // Default value
+    const runtime = await getResolvedRuntimeConfig();
+    const aiProvider = runtime.settings.aiProvider || AI_PROVIDER;
+    const openaiApiKey = runtime.secrets.openaiApiKey || OPENAI_API_KEY;
+    const openaiModel = runtime.settings.openaiModel || OPENAI_MODEL;
+    const ollamaUrl = runtime.settings.ollamaUrl || OLLAMA_URL;
+    const ollamaModel = runtime.settings.ollamaModel || OLLAMA_MODEL;
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => {
@@ -279,21 +296,21 @@ Category:`;
     }, 10000); // 10-second timeout
 
     // --- AI Provider Logic ---
-    if (AI_PROVIDER.toLowerCase() === 'openai') {
-        if (!OPENAI_API_KEY) {
+    if (aiProvider.toLowerCase() === 'openai') {
+        if (!openaiApiKey) {
             console.error('[Webserver] FATAL: AI_PROVIDER is set to openai, but OPENAI_API_KEY is not configured!');
             return 'OTHER'; // Fallback if key is missing
         }
-        console.log(`[Webserver] Categorizing with OpenAI model: ${OPENAI_MODEL}`);
+        console.log(`[Webserver] Categorizing with OpenAI model: ${openaiModel}`);
 
         const response = await fetch('https://api.openai.com/v1/chat/completions', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                'Authorization': `Bearer ${OPENAI_API_KEY}`
+                'Authorization': `Bearer ${openaiApiKey}`
             },
             body: JSON.stringify({
-                model: OPENAI_MODEL,
+                model: openaiModel,
                 messages: [{ role: 'user', content: commonPrompt }],
                 temperature: 0.2, // Lower temp for more deterministic category
                 max_tokens: 20    // A category name is short
@@ -315,13 +332,13 @@ Category:`;
         }
 
     } else { // Default to Ollama
-        console.log(`[Webserver] Categorizing with Ollama model: ${OLLAMA_MODEL}`);
+        console.log(`[Webserver] Categorizing with Ollama model: ${ollamaModel}`);
 
-        const response = await fetch(`${OLLAMA_URL}/api/generate`, {
+        const response = await fetch(`${ollamaUrl}/api/generate`, {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
           body: JSON.stringify({
-            model: OLLAMA_MODEL,
+            model: ollamaModel,
             prompt: commonPrompt, // The prompt is compatible
             stream: false,
             options: {
@@ -741,7 +758,8 @@ app.get('/api/setup/status', async (req, res) => {
 app.get('/api/setup/checks', async (req, res) => {
   await dbReady;
   try {
-    const checks = await runSetupChecks({ rootDir: __dirname, env: process.env });
+    const runtime = await getResolvedRuntimeConfig();
+    const checks = await runSetupChecks({ rootDir: __dirname, env: process.env, runtime });
     res.json(checks);
   } catch (err) {
     console.error('Error running setup checks:', err);
@@ -811,7 +829,8 @@ app.post('/api/setup/test-provider', async (req, res) => {
   await dbReady;
   const { provider } = req.body || {};
   try {
-    const checks = await runSetupChecks({ rootDir: __dirname, env: process.env });
+    const runtime = await getResolvedRuntimeConfig();
+    const checks = await runSetupChecks({ rootDir: __dirname, env: process.env, runtime });
     const providerMap = {
       geocoding: checks.geocodingProvider,
       transcription: checks.transcriptionProvider,
@@ -972,7 +991,12 @@ app.put('/api/settings', adminAuth, async (req, res) => {
   try {
     const result = await saveSettings(db, req.body || {}, req.user?.username || 'admin');
     const requiresRestart = Object.values(result).some((item) => item.requiresRestart);
-    res.json({ ok: true, result, requiresRestart });
+    res.json({
+      ok: true,
+      result,
+      requiresRestart,
+      hotAppliedByWebserver: ['aiProvider', 'ollamaUrl', 'ollamaModel', 'openaiModel']
+    });
   } catch (err) {
     console.error('Error updating settings:', err);
     res.status(500).json({ error: 'Internal server error' });
@@ -997,7 +1021,8 @@ app.put('/api/settings/secrets/:key', adminAuth, async (req, res) => {
 app.get('/api/settings/checks', adminAuth, async (req, res) => {
   await dbReady;
   try {
-    const checks = await runSetupChecks({ rootDir: __dirname, env: process.env });
+    const runtime = await getResolvedRuntimeConfig();
+    const checks = await runSetupChecks({ rootDir: __dirname, env: process.env, runtime });
     res.json(checks);
   } catch (err) {
     console.error('Error running settings checks:', err);

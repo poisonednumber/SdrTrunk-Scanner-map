@@ -41,6 +41,7 @@ function checkWritableDir(dirPath) {
 async function runSetupChecks(options = {}) {
   const rootDir = options.rootDir || path.join(__dirname, '..', '..');
   const env = options.env || process.env;
+  const runtime = options.runtime || { settings: {}, secrets: {} };
   const [node, python, ffmpeg, ollama] = await Promise.all([
     checkCommand(process.execPath, ['--version']),
     checkCommand(env.PYTHON_COMMAND || (process.platform === 'win32' ? 'py' : 'python3'), ['--version']),
@@ -57,19 +58,19 @@ async function runSetupChecks(options = {}) {
     dataDir: checkWritableDir(path.join(rootDir, 'data')),
     audioDir: checkWritableDir(path.join(rootDir, 'audio')),
     geocodingProvider: {
-      ok: Boolean(env.GOOGLE_MAPS_API_KEY || env.LOCATIONIQ_API_KEY),
+      ok: Boolean(runtime.secrets.googleMapsApiKey || runtime.secrets.locationIqApiKey || env.GOOGLE_MAPS_API_KEY || env.LOCATIONIQ_API_KEY),
       configuredProviders: {
-        google: Boolean(env.GOOGLE_MAPS_API_KEY),
-        locationiq: Boolean(env.LOCATIONIQ_API_KEY)
+        google: Boolean(runtime.secrets.googleMapsApiKey || env.GOOGLE_MAPS_API_KEY),
+        locationiq: Boolean(runtime.secrets.locationIqApiKey || env.LOCATIONIQ_API_KEY)
       }
     },
     transcriptionProvider: {
-      ok: Boolean(env.TRANSCRIPTION_MODE || 'local'),
-      mode: env.TRANSCRIPTION_MODE || 'local'
+      ok: Boolean(runtime.settings.transcriptionMode || env.TRANSCRIPTION_MODE || 'local'),
+      mode: runtime.settings.transcriptionMode || env.TRANSCRIPTION_MODE || 'local'
     },
     aiProvider: {
-      ok: Boolean(env.AI_PROVIDER || 'ollama'),
-      provider: env.AI_PROVIDER || 'ollama'
+      ok: Boolean(runtime.settings.aiProvider || env.AI_PROVIDER || 'ollama'),
+      provider: runtime.settings.aiProvider || env.AI_PROVIDER || 'ollama'
     },
     uploadEndpoint: {
       ok: true,
