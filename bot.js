@@ -808,24 +808,7 @@ const logger = winston.createLogger({
 
 // --- NEW: Add S3 Client Setup --- 
 const AWS = require('aws-sdk');
-let s3 = null;
-if (STORAGE_MODE === 's3') {
-  if (!S3_ENDPOINT || !S3_BUCKET_NAME || !S3_ACCESS_KEY_ID || !S3_SECRET_ACCESS_KEY) {
-    logger.warn('WARNING: STORAGE_MODE is s3, but required S3 environment variables are missing. Audio serving from S3 will be unavailable until setup is completed.');
-  } else {
-    AWS.config.update({
-      accessKeyId: S3_ACCESS_KEY_ID,
-      secretAccessKey: S3_SECRET_ACCESS_KEY,
-      endpoint: S3_ENDPOINT,
-      s3ForcePathStyle: true, // Necessary for MinIO/non-AWS S3
-      signatureVersion: 'v4'
-    });
-    s3 = new AWS.S3();
-    logger.info(`[Bot] Storage mode set to S3. Endpoint: ${S3_ENDPOINT}, Bucket: ${S3_BUCKET_NAME}`);
-  }
-} else {
-  logger.info('[Bot] Storage mode set to local.');
-}
+logger.info(`[Bot] Startup storage mode from .env: ${STORAGE_MODE || 'local'}. Runtime settings may override this after database initialization.`);
 // --- END S3 Client Setup ---
 
 // --- INITIALIZATION FUNCTIONS ---
@@ -968,6 +951,46 @@ async function getBotTranscriptionConfig() {
     icadProfile: runtime.settings.icadProfile || ICAD_PROFILE || 'whisper-1',
     icadApiKey: runtime.secrets.icadApiKey || ICAD_API_KEY || ''
   };
+}
+
+async function getBotStorageConfig() {
+  const runtime = await getBotRuntimeConfig();
+  const mode = (runtime.settings.storageMode || STORAGE_MODE || 'local').toLowerCase();
+
+  return {
+    mode: mode === 's3' ? 's3' : 'local',
+    s3Endpoint: runtime.settings.s3Endpoint || S3_ENDPOINT || '',
+    s3BucketName: runtime.settings.s3BucketName || S3_BUCKET_NAME || '',
+    s3AccessKeyId: runtime.secrets.s3AccessKeyId || S3_ACCESS_KEY_ID || '',
+    s3SecretAccessKey: runtime.secrets.s3SecretAccessKey || S3_SECRET_ACCESS_KEY || ''
+  };
+}
+
+function createS3Client(storageConfig) {
+  return new AWS.S3({
+    accessKeyId: storageConfig.s3AccessKeyId,
+    secretAccessKey: storageConfig.s3SecretAccessKey,
+    endpoint: storageConfig.s3Endpoint,
+    s3ForcePathStyle: true,
+    signatureVersion: 'v4'
+  });
+}
+
+function isS3Ready(storageConfig) {
+  return Boolean(
+    storageConfig.mode === 's3' &&
+    storageConfig.s3Endpoint &&
+    storageConfig.s3BucketName &&
+    storageConfig.s3AccessKeyId &&
+    storageConfig.s3SecretAccessKey
+  );
+}
+
+function getToneAudioPath(storageConfig, audioFilePath) {
+  if (storageConfig.mode === 's3' && storageConfig.s3Endpoint && storageConfig.s3BucketName) {
+    return `https://${storageConfig.s3Endpoint.replace('https://', '').replace('http://', '')}/${storageConfig.s3BucketName}/${audioFilePath}`;
+  }
+  return path.join(__dirname, 'audio', audioFilePath);
 }
 
 async function getPublicAudioUrl(audioId) {
@@ -3005,7 +3028,7 @@ function handleNewAudio(audioData) {
   }
 
   // Read file into buffer (This is needed for DB blob AND for S3->Local transcription)
-  fs.readFile(tempPath, (err, fileBuffer) => {
+  fs.readFile(tempPath, async (err, fileBuffer) => {
     if (err) {
       logger.error(`Error reading audio file ${tempPath}:`, err);
       // Clean up temp file if read fails
@@ -3015,10 +3038,12 @@ function handleNewAudio(audioData) {
       return;
     }
 
+    const storageConfig = await getBotStorageConfig();
+
     // --- Start DB Operations --- Miminized changes here
     // Determine the storage path/key based on STORAGE_MODE
     let storagePath;
-    if (STORAGE_MODE === 's3') {
+    if (storageConfig.mode === 's3') {
       // For S3, we store the filename as the key (assuming it's unique enough)
       // You might want a more structured path like 'audio/YYYY/MM/DD/filename'
       storagePath = filename;
@@ -3066,7 +3091,7 @@ function handleNewAudio(audioData) {
               filename,
               talkGroupID,
               transcriptionMode: transcriptionConfig.mode,
-              storageMode: STORAGE_MODE
+              storageMode: storageConfig.mode
             }
           });
           logger.info(`Created transcription job ${transcriptionJobId} for transcription ID ${transcriptionId}`);
@@ -3075,7 +3100,7 @@ function handleNewAudio(audioData) {
         }
 
         // Conditionally insert audio blob for Listen Live feature (local storage only)
-        if (STORAGE_MODE !== 's3') {
+        if (storageConfig.mode !== 's3') {
             db.run(
               `INSERT INTO audio_files (transcription_id, audio_data) VALUES (?, ?)`,
               [transcriptionId, fileBuffer],
@@ -3168,7 +3193,8 @@ function handleNewAudio(audioData) {
                           storagePath,
                           audioPathForSplitting,
                           tempPath,
-                          finalPathIfLocal
+                          finalPathIfLocal,
+                          storageConfig.mode
                         );
                       }
                     };
@@ -3227,9 +3253,9 @@ function handleNewAudio(audioData) {
                       logger.info(`Checking for two-tone in talk group ${talkGroupID} (ID: ${transcriptionId}) - empty transcription`);
                       
                       // Use the audio file path for tone detection
-                      const audioPathForTones = STORAGE_MODE === 's3' ? 
-                        `https://${S3_ENDPOINT.replace('https://', '').replace('http://', '')}/${S3_BUCKET_NAME}/${filename}` :
-                        (finalPathIfLocal || path.join(__dirname, 'audio', filename));
+                      const audioPathForTones = storageConfig.mode === 's3'
+                        ? getToneAudioPath(storageConfig, filename)
+                        : (finalPathIfLocal || path.join(__dirname, 'audio', filename));
                       
                       // Wait for tone detection to complete before continuing
                       await new Promise((resolve) => {
@@ -3243,7 +3269,7 @@ function handleNewAudio(audioData) {
                     }
                     
                     // Clean up temp file only if storage was S3
-                    if (STORAGE_MODE === 's3') {
+                    if (storageConfig.mode === 's3') {
                       // Use setImmediate to avoid file handle race conditions
                       setImmediate(() => {
                          fs.unlink(tempPath, (errUnlink) => {
@@ -3274,11 +3300,12 @@ function handleNewAudio(audioData) {
                     emergency, priority, encrypted, call_length, // <-- Pass call metadata
                     freq_error, signalQuality, // <-- Pass signal quality
                     frequency, start_time, stop_time, // <-- Pass timing/frequency
-                    tdma_slot, phase2_tdma, color_code // <-- Pass TDMA/color code
+                    tdma_slot, phase2_tdma, color_code, // <-- Pass TDMA/color code
+                    storageConfig
                   );
 
                   // Clean up temp file only if storage was S3
-                  if (STORAGE_MODE === 's3') {
+                  if (storageConfig.mode === 's3') {
                     // Use setImmediate to avoid file handle race conditions
                     setImmediate(() => {
                       fs.unlink(tempPath, (errUnlink) => {
@@ -3309,21 +3336,21 @@ function handleNewAudio(audioData) {
 
             if (transcriptionConfig.mode === 'openai') {
                 // OpenAI API transcription mode
-                const pathToUse = (STORAGE_MODE === 'local') ? finalPathIfLocal : tempPath;
+                const pathToUse = (storageConfig.mode === 'local') ? finalPathIfLocal : tempPath;
                 transcribeWithOpenAIAPI(pathToUse, processingCallback);
             } else if (transcriptionConfig.mode === 'remote') {
                 // Use the remote function for faster-whisper server
-                const pathToUseForRemote = (STORAGE_MODE === 'local') ? finalPathIfLocal : tempPath;
+                const pathToUseForRemote = (storageConfig.mode === 'local') ? finalPathIfLocal : tempPath;
                 transcribeAudioRemotely(pathToUseForRemote, processingCallback);
             } else if (transcriptionConfig.mode === 'icad') {
                 // ICAD API transcription mode (OpenAI-compatible interface)
-                const pathToUse = (STORAGE_MODE === 'local') ? finalPathIfLocal : tempPath;
+                const pathToUse = (storageConfig.mode === 'local') ? finalPathIfLocal : tempPath;
                 transcribeWithICADAPI(pathToUse, processingCallback);
             } else { // 'local' transcription mode
                 const localRequestId = uuidv4();
                 let payload;
 
-                if (STORAGE_MODE === 's3') {
+                if (storageConfig.mode === 's3') {
                     // S3 Storage + Local Transcription: Send buffer
                     logger.info(`Queueing local transcription (ID: ${localRequestId}) for DB ID ${transcriptionId} using BASE64 BUFFER`);
                     
@@ -3417,22 +3444,35 @@ function handleNewAudio(audioData) {
         // --- End afterStorageComplete function definition ---
 
         // --- Handle Audio Storage based on Mode ---
-        if (STORAGE_MODE === 's3') {
+        if (storageConfig.mode === 's3') {
+          if (!isS3Ready(storageConfig)) {
+            const error = new Error('S3 storage mode is selected, but S3 endpoint, bucket, or credentials are incomplete.');
+            logger.error(error.message);
+            if (transcriptionJobId) {
+              safelyUpdateProcessingJob('mark transcription job failed', () => markJobFailed(db, transcriptionJobId, error));
+            }
+            db.run('DELETE FROM transcriptions WHERE id = ?', [transcriptionId], () => {});
+            fs.unlink(tempPath, (errUnlink) => {
+              if (errUnlink) logger.error(`Error deleting temp file after incomplete S3 config ${tempPath}:`, errUnlink);
+            });
+            return;
+          }
+          const s3Client = createS3Client(storageConfig);
           // Upload the buffer to S3
           const s3Params = {
-            Bucket: S3_BUCKET_NAME,
+            Bucket: storageConfig.s3BucketName,
             Key: storagePath, // Use the determined S3 key
             Body: fileBuffer,
             // ContentType: 'audio/mpeg', // Or determine dynamically
           };
-          s3.upload(s3Params, (s3Err, data) => {
+          s3Client.upload(s3Params, (s3Err, data) => {
             if (s3Err) {
               // Check for specific MinIO storage threshold error
               const errorMessage = s3Err.message || s3Err.toString() || '';
               if (errorMessage.includes('minimum free drive threshold') || errorMessage.includes('free drive threshold')) {
                 logger.error(`[MINIO STORAGE FULL] MinIO server has reached its minimum free drive threshold.`);
                 logger.error(`[MINIO STORAGE FULL] Transcription ID ${transcriptionId} could not be uploaded.`);
-                logger.error(`[MINIO STORAGE FULL] Action required: Free up disk space on MinIO server or delete old objects from bucket: ${S3_BUCKET_NAME}`);
+                logger.error(`[MINIO STORAGE FULL] Action required: Free up disk space on MinIO server or delete old objects from bucket: ${storageConfig.s3BucketName}`);
                 logger.error(`[MINIO STORAGE FULL] Full error: ${errorMessage}`);
               } else {
               logger.error(`Error uploading audio to S3 for transcription ID ${transcriptionId} (key: ${storagePath}):`, s3Err);
@@ -3924,7 +3964,8 @@ async function processMergedCallSegments(
   storagePath,
   audioPathForSplitting,
   tempPath,
-  finalPathIfLocal
+  finalPathIfLocal,
+  storageMode = STORAGE_MODE
 ) {
   logger.info(`Processing ${segmentTranscriptions.length} segments for merged call ID ${transcriptionId}`);
   
@@ -3990,7 +4031,7 @@ async function processMergedCallSegments(
     );
     
     // Clean up temp file only if storage was S3
-    if (STORAGE_MODE === 's3') {
+    if (storageMode === 's3') {
       setImmediate(() => {
         fs.unlink(tempPath, (errUnlink) => {
           if (errUnlink && errUnlink.code !== 'ENOENT') {
@@ -4029,11 +4070,13 @@ async function handleNewTranscription(
   stop_time,
   tdma_slot,
   phase2_tdma,
-  color_code
+  color_code,
+  storageConfig = null
 ) {
   logger.info(`Starting handleNewTranscription for ID ${id}`);
   logger.info(`Transcription text length: ${transcriptionText.length} characters`);
   logger.info(`Talk Group: ${talkGroupID} - ${talkGroupName}`);
+  const resolvedStorageConfig = storageConfig || await getBotStorageConfig();
 
   // Auto-queue calls after two-tone detection (if in two-tone mode)
   if (IS_TWO_TONE_MODE_ENABLED && lastTwoToneTime > 0 && lastDetectedToneGroup) {
@@ -4081,9 +4124,7 @@ async function handleNewTranscription(
       logger.info(`Checking for two-tone in talk group ${talkGroupID} (ID: ${id})`);
       
       // Construct the proper audio path for tone detection
-      const audioPathForTones = STORAGE_MODE === 's3' ? 
-        `https://${S3_ENDPOINT.replace('https://', '').replace('http://', '')}/${S3_BUCKET_NAME}/${audioFilePath}` :
-        path.join(__dirname, 'audio', audioFilePath); // Construct full local path
+      const audioPathForTones = getToneAudioPath(resolvedStorageConfig, audioFilePath);
       
       // Wait for tone detection to complete before continuing
       await new Promise((resolve) => {
@@ -5602,7 +5643,7 @@ function playAudioForTalkGroup(talkGroupID, transcriptionId) {
   }
 }
 
-function processAudioQueue(talkGroupID) {
+async function processAudioQueue(talkGroupID) {
   talkGroupID = talkGroupID.toString();
   const talkGroupData = activeVoiceChannels.get(talkGroupID);
   if (!talkGroupData || !talkGroupData.player || !talkGroupData.queue) {
@@ -5648,14 +5689,21 @@ function processAudioQueue(talkGroupID) {
     });
   };
 
-  if (STORAGE_MODE === 's3') {
+  const storageConfig = await getBotStorageConfig();
+  if (storageConfig.mode === 's3') {
+    if (!isS3Ready(storageConfig)) {
+      logger.error(`S3 Mode: storage configuration incomplete for Discord playback (ID ${transcriptionId})`);
+      processAudioQueue(talkGroupID);
+      return;
+    }
+    const s3Client = createS3Client(storageConfig);
     db.get('SELECT audio_file_path FROM transcriptions WHERE id = ?', [transcriptionId], (err, row) => {
         if (err || !row || !row.audio_file_path) {
             logger.error(`S3 Mode: Could not find audio_file_path for transcription ID ${transcriptionId}`, err);
             processAudioQueue(talkGroupID);
             return;
         }
-        const s3Stream = s3.getObject({ Bucket: S3_BUCKET_NAME, Key: row.audio_file_path }).createReadStream();
+        const s3Stream = s3Client.getObject({ Bucket: storageConfig.s3BucketName, Key: row.audio_file_path }).createReadStream();
         s3Stream.on('error', s3Err => {
             logger.error(`Error streaming from S3 for Discord playback (ID ${transcriptionId}):`, s3Err);
             processAudioQueue(talkGroupID);

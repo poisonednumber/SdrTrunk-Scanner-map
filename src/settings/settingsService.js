@@ -6,6 +6,8 @@ const SETTING_DEFINITIONS = {
   publicDomain: { envKey: 'PUBLIC_DOMAIN', defaultValue: 'localhost', requiresRestart: true },
   timezone: { envKey: 'TIMEZONE', defaultValue: 'US/Eastern', requiresRestart: false },
   storageMode: { envKey: 'STORAGE_MODE', defaultValue: 'local', requiresRestart: true },
+  s3Endpoint: { envKey: 'S3_ENDPOINT', defaultValue: '', requiresRestart: true },
+  s3BucketName: { envKey: 'S3_BUCKET_NAME', defaultValue: '', requiresRestart: true },
   transcriptionMode: { envKey: 'TRANSCRIPTION_MODE', defaultValue: 'local', requiresRestart: true },
   transcriptionDevice: { envKey: 'TRANSCRIPTION_DEVICE', defaultValue: 'cpu', requiresRestart: true },
   aiProvider: { envKey: 'AI_PROVIDER', defaultValue: 'ollama', requiresRestart: false },

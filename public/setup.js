@@ -73,6 +73,8 @@ document.getElementById('save-providers').addEventListener('click', async () => 
       method: 'POST',
       body: JSON.stringify({
         storageMode: document.getElementById('storage-mode').value,
+        s3Endpoint: document.getElementById('s3-endpoint').value,
+        s3BucketName: document.getElementById('s3-bucket').value,
         transcriptionMode: document.getElementById('transcription-mode').value,
         aiProvider: document.getElementById('ai-provider').value,
         timezone: document.getElementById('timezone').value
@@ -92,6 +94,22 @@ document.getElementById('save-providers').addEventListener('click', async () => 
       await jsonFetch('/api/setup/secrets', {
         method: 'POST',
         body: JSON.stringify({ key: 'googleMapsApiKey', value: geocodeKey })
+      });
+    }
+
+    const s3AccessKey = document.getElementById('s3-access-key').value;
+    if (s3AccessKey) {
+      await jsonFetch('/api/setup/secrets', {
+        method: 'POST',
+        body: JSON.stringify({ key: 's3AccessKeyId', value: s3AccessKey })
+      });
+    }
+
+    const s3SecretKey = document.getElementById('s3-secret-key').value;
+    if (s3SecretKey) {
+      await jsonFetch('/api/setup/secrets', {
+        method: 'POST',
+        body: JSON.stringify({ key: 's3SecretAccessKey', value: s3SecretKey })
       });
     }
 

@@ -1,11 +1,11 @@
 const normalKeys = [
   'publicDomain', 'timezone', 'summaryLookbackHours', 'askAiLookbackHours',
   'mappedTalkGroups', 'enableMappedTalkGroups', 'storageMode', 'transcriptionMode',
-  'transcriptionDevice', 'aiProvider', 'ollamaUrl', 'ollamaModel', 'openaiModel',
+  's3Endpoint', 's3BucketName', 'transcriptionDevice', 'aiProvider', 'ollamaUrl', 'ollamaModel', 'openaiModel',
   'fasterWhisperServerUrl', 'whisperModel', 'openaiTranscriptionPrompt',
   'openaiTranscriptionModel', 'openaiTranscriptionTemperature', 'icadUrl', 'icadProfile'
 ];
-const secretKeys = ['uploadApiKey', 'googleMapsApiKey', 'locationIqApiKey', 'openaiApiKey', 'icadApiKey'];
+const secretKeys = ['uploadApiKey', 'googleMapsApiKey', 'locationIqApiKey', 'openaiApiKey', 'icadApiKey', 's3AccessKeyId', 's3SecretAccessKey'];
 
 function showStep(id) {
   document.querySelectorAll('.section').forEach((section) => section.classList.toggle('active', section.id === id));

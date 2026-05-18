@@ -136,25 +136,7 @@ app.get('/api/test', (req, res) => {
   res.json({ message: 'Server is working', timestamp: Date.now() });
 });
 
-// --- NEW: S3 Client Setup ---
-let s3 = null;
-if (STORAGE_MODE === 's3') {
-  if (!S3_ENDPOINT || !S3_BUCKET_NAME || !S3_ACCESS_KEY_ID || !S3_SECRET_ACCESS_KEY) {
-    console.warn('WARNING: STORAGE_MODE=s3, but S3 configuration is incomplete. Audio serving from S3 will be unavailable until setup is completed.');
-  } else {
-    AWS.config.update({
-      accessKeyId: S3_ACCESS_KEY_ID,
-      secretAccessKey: S3_SECRET_ACCESS_KEY,
-      endpoint: S3_ENDPOINT,
-      s3ForcePathStyle: true, // Necessary for MinIO/non-AWS S3
-      signatureVersion: 'v4'
-    });
-    s3 = new AWS.S3();
-    console.log(`[Webserver] Storage mode set to S3. Endpoint: ${S3_ENDPOINT}, Bucket: ${S3_BUCKET_NAME}`);
-  }
-} else {
-  console.log('[Webserver] Storage mode set to local.');
-}
+console.log(`[Webserver] Startup storage mode from .env: ${STORAGE_MODE || 'local'}. Runtime settings may override this after database initialization.`);
 
 // Authentication is enabled if ENABLE_AUTH=true
 const authEnabled = ENABLE_AUTH?.toLowerCase() === 'true';
@@ -198,6 +180,38 @@ const dbReady = applyMigrations(db, { enableAuth: true })
 async function getResolvedRuntimeConfig() {
   await dbReady;
   return getRuntimeConfig(db, process.env);
+}
+
+async function getWebserverStorageConfig() {
+  const runtime = await getResolvedRuntimeConfig();
+  const mode = (runtime.settings.storageMode || STORAGE_MODE || 'local').toLowerCase();
+  return {
+    mode: mode === 's3' ? 's3' : 'local',
+    s3Endpoint: runtime.settings.s3Endpoint || S3_ENDPOINT || '',
+    s3BucketName: runtime.settings.s3BucketName || S3_BUCKET_NAME || '',
+    s3AccessKeyId: runtime.secrets.s3AccessKeyId || S3_ACCESS_KEY_ID || '',
+    s3SecretAccessKey: runtime.secrets.s3SecretAccessKey || S3_SECRET_ACCESS_KEY || ''
+  };
+}
+
+function isS3Ready(storageConfig) {
+  return Boolean(
+    storageConfig.mode === 's3' &&
+    storageConfig.s3Endpoint &&
+    storageConfig.s3BucketName &&
+    storageConfig.s3AccessKeyId &&
+    storageConfig.s3SecretAccessKey
+  );
+}
+
+function createS3Client(storageConfig) {
+  return new AWS.S3({
+    accessKeyId: storageConfig.s3AccessKeyId,
+    secretAccessKey: storageConfig.s3SecretAccessKey,
+    endpoint: storageConfig.s3Endpoint,
+    s3ForcePathStyle: true,
+    signatureVersion: 'v4'
+  });
 }
 
 // Helper Functions for Authentication
@@ -704,10 +718,17 @@ app.get('/audio/:id', async (req, res) => {
         const audioStoragePath = transcriptionRow.audio_file_path;
         const extension = path.extname(audioStoragePath).toLowerCase();
         const contentType = extension === '.m4a' ? 'audio/mp4' : 'audio/mpeg';
+        const storageConfig = await getWebserverStorageConfig();
 
-        if (STORAGE_MODE === 's3') {
-            const params = { Bucket: S3_BUCKET_NAME, Key: audioStoragePath };
-            const s3Stream = s3.getObject(params).createReadStream();
+        if (storageConfig.mode === 's3') {
+            if (!isS3Ready(storageConfig)) {
+                console.warn(`[Audio S3] S3 runtime settings are incomplete. Falling back to DB for transcription ${transcriptionId}.`);
+                serveAudioFromDb(res, transcriptionId);
+                return;
+            }
+            const s3Client = createS3Client(storageConfig);
+            const params = { Bucket: storageConfig.s3BucketName, Key: audioStoragePath };
+            const s3Stream = s3Client.getObject(params).createReadStream();
             s3Stream.on('error', (s3Err) => {
                 console.warn(`[Audio S3] S3 stream error for key ${audioStoragePath}: ${s3Err.code}. Falling back to DB.`);
                 serveAudioFromDb(res, transcriptionId);
@@ -835,7 +856,7 @@ app.post('/api/setup/test-provider', async (req, res) => {
       geocoding: checks.geocodingProvider,
       transcription: checks.transcriptionProvider,
       ai: checks.aiProvider,
-      storage: checks.dataDir,
+      storage: checks.storageProvider,
       upload: checks.uploadEndpoint
     };
     res.json(providerMap[provider] || { ok: false, error: 'Unknown provider test' });
@@ -851,6 +872,17 @@ app.post('/api/setup/complete', async (req, res) => {
     const status = await getSetupStatus(db, process.env);
     if (status.missing.length > 0) {
       return res.status(400).json({ error: 'Setup is incomplete', missing: status.missing });
+    }
+    const runtime = await getResolvedRuntimeConfig();
+    const checks = await runSetupChecks({ rootDir: __dirname, env: process.env, runtime });
+    const requiredChecks = ['node', 'python', 'ffmpeg', 'dataDir', 'audioDir', 'geocodingProvider', 'transcriptionProvider', 'aiProvider', 'storageProvider', 'uploadEndpoint'];
+    const failedChecks = requiredChecks.filter((key) => !checks[key] || !checks[key].ok);
+    if (failedChecks.length > 0) {
+      return res.status(400).json({
+        error: 'Setup readiness checks failed',
+        failedChecks,
+        checks
+      });
     }
     await markSetupComplete(db, 'setup');
     res.json({ ok: true, setupComplete: true });
