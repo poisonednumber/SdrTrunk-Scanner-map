@@ -7,7 +7,11 @@
   "scripts": {
     "start": "node bot.js",
     "web": "node webserver.js",
-    "import-talkgroups": "node import_csv.js"
+    "import-talkgroups": "node import_csv.js",
+    "check:config": "node scripts/check-config.js",
+    "check:syntax": "node --check bot.js && node --check webserver.js && node --check geocoding.js && node --check import_csv.js && node --check public/app.js",
+    "demo:data": "node scripts/generate-demo-data.js",
+    "test": "node --test test/*.test.js"
   },
   "engines": {
     "node": ">=18"
