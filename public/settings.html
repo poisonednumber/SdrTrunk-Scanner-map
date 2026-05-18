@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Scanner Map Settings</title>
+  <link rel="stylesheet" href="/setup.css" />
+</head>
+<body>
+  <main class="setup-shell">
+    <header class="setup-header">
+      <div>
+        <h1>Scanner Map Settings</h1>
+        <p>Manage runtime settings, write-only secrets, and setup diagnostics.</p>
+      </div>
+      <a class="status-pill" href="/">Back to Map</a>
+    </header>
+
+    <div class="layout">
+      <nav class="steps" aria-label="Settings sections">
+        <button class="step-button active" data-step="general">General</button>
+        <button class="step-button" data-step="ingestion">Ingestion</button>
+        <button class="step-button" data-step="providers">Providers</button>
+        <button class="step-button" data-step="diagnostics">Diagnostics</button>
+      </nav>
+
+      <section class="panel">
+        <div id="general" class="section active">
+          <h2>General</h2>
+          <div class="grid">
+            <div class="field"><label for="publicDomain">Public domain</label><input id="publicDomain" /></div>
+            <div class="field"><label for="timezone">Timezone</label><input id="timezone" /></div>
+            <div class="field"><label for="summaryLookbackHours">Summary lookback hours</label><input id="summaryLookbackHours" type="number" min="0" /></div>
+            <div class="field"><label for="askAiLookbackHours">Ask AI lookback hours</label><input id="askAiLookbackHours" type="number" min="0" /></div>
+          </div>
+        </div>
+
+        <div id="ingestion" class="section">
+          <h2>Ingestion</h2>
+          <div class="grid">
+            <div class="field"><label for="mappedTalkGroups">Mapped talkgroups</label><input id="mappedTalkGroups" /></div>
+            <div class="field"><label for="enableMappedTalkGroups">Enable mapped talkgroups</label><select id="enableMappedTalkGroups"><option>true</option><option>false</option></select></div>
+            <div class="field"><label for="uploadApiKey">Upload API key</label><input id="uploadApiKey" type="password" placeholder="Write-only replacement" /></div>
+          </div>
+        </div>
+
+        <div id="providers" class="section">
+          <h2>Providers</h2>
+          <div class="grid">
+            <div class="field"><label for="storageMode">Storage mode</label><select id="storageMode"><option>local</option><option>s3</option></select></div>
+            <div class="field"><label for="transcriptionMode">Transcription mode</label><select id="transcriptionMode"><option>local</option><option>remote</option><option>openai</option><option>icad</option></select></div>
+            <div class="field"><label for="transcriptionDevice">Transcription device</label><select id="transcriptionDevice"><option>cpu</option><option>cuda</option></select></div>
+            <div class="field"><label for="aiProvider">AI provider</label><select id="aiProvider"><option>ollama</option><option>openai</option></select></div>
+            <div class="field"><label for="ollamaUrl">Ollama URL</label><input id="ollamaUrl" /></div>
+            <div class="field"><label for="ollamaModel">Ollama model</label><input id="ollamaModel" /></div>
+            <div class="field"><label for="openaiModel">OpenAI model</label><input id="openaiModel" /></div>
+            <div class="field"><label for="fasterWhisperServerUrl">Remote transcription URL</label><input id="fasterWhisperServerUrl" /></div>
+            <div class="field"><label for="googleMapsApiKey">Google Maps API key</label><input id="googleMapsApiKey" type="password" placeholder="Write-only replacement" /></div>
+            <div class="field"><label for="locationIqApiKey">LocationIQ API key</label><input id="locationIqApiKey" type="password" placeholder="Write-only replacement" /></div>
+            <div class="field"><label for="openaiApiKey">OpenAI API key</label><input id="openaiApiKey" type="password" placeholder="Write-only replacement" /></div>
+          </div>
+        </div>
+
+        <div id="diagnostics" class="section">
+          <h2>Diagnostics</h2>
+          <div class="actions">
+            <button class="secondary" id="run-diagnostics">Run Checks</button>
+            <button class="secondary" id="load-jobs">Load Job Summary</button>
+          </div>
+          <div id="diagnostic-output" class="result-list"></div>
+        </div>
+
+        <div class="actions">
+          <button class="primary" id="save-settings">Save Settings</button>
+          <span id="save-result"></span>
+        </div>
+      </section>
+    </div>
+  </main>
+  <script src="/settings.js"></script>
+</body>
+</html>

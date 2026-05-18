@@ -84,10 +84,35 @@ const BASE_MIGRATIONS = [
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         started_at DATETIME,
         completed_at DATETIME,
-        FOREIGN KEY(transcription_id) REFERENCES transcriptions(id)
+        FOREIGN KEY(transcription_id) REFERENCES transcriptions(id) ON DELETE SET NULL
       )`,
       `CREATE INDEX IF NOT EXISTS idx_call_jobs_status_priority ON call_jobs (status, priority DESC, created_at ASC)`,
       `CREATE INDEX IF NOT EXISTS idx_call_jobs_transcription_type ON call_jobs (transcription_id, job_type)`
+    ]
+  },
+  {
+    id: '004_create_app_settings',
+    statements: [
+      `CREATE TABLE IF NOT EXISTS app_settings (
+        key TEXT PRIMARY KEY,
+        value TEXT,
+        is_secret INTEGER NOT NULL DEFAULT 0,
+        requires_restart INTEGER NOT NULL DEFAULT 0,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )`,
+      `CREATE TABLE IF NOT EXISTS setup_state (
+        key TEXT PRIMARY KEY,
+        value TEXT,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )`,
+      `CREATE TABLE IF NOT EXISTS settings_audit_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        event_type TEXT NOT NULL,
+        setting_key TEXT,
+        actor TEXT,
+        details_json TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )`
     ]
   }
 ];

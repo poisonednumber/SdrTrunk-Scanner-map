@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Scanner Map Setup</title>
+  <link rel="stylesheet" href="/setup.css" />
+</head>
+<body>
+  <main class="setup-shell">
+    <header class="setup-header">
+      <div>
+        <h1>Scanner Map Setup</h1>
+        <p>Configure the instance, verify dependencies, and finish first-run setup from the browser.</p>
+      </div>
+      <div id="setup-status" class="status-pill">Checking setup...</div>
+    </header>
+
+    <div class="layout">
+      <nav class="steps" aria-label="Setup steps">
+        <button class="step-button active" data-step="checks">1. Checks</button>
+        <button class="step-button" data-step="admin">2. Admin</button>
+        <button class="step-button" data-step="providers">3. Providers</button>
+        <button class="step-button" data-step="finish">4. Finish</button>
+      </nav>
+
+      <section class="panel">
+        <div id="checks" class="section active">
+          <h2>Installer Checks</h2>
+          <p>Scanner Map verifies dependencies and shows exact commands for anything missing. The web app does not run privileged installer commands.</p>
+          <div class="actions">
+            <button class="primary" id="run-checks">Run Checks</button>
+          </div>
+          <div id="checks-list" class="check-list"></div>
+        </div>
+
+        <div id="admin" class="section">
+          <h2>Admin Account</h2>
+          <p>Create or update the local admin account used for protected setup and settings screens.</p>
+          <div class="grid">
+            <div class="field">
+              <label for="admin-password">Admin password</label>
+              <input id="admin-password" type="password" autocomplete="new-password" />
+            </div>
+            <div class="field">
+              <label for="confirm-password">Confirm password</label>
+              <input id="confirm-password" type="password" autocomplete="new-password" />
+            </div>
+          </div>
+          <div class="actions">
+            <button class="primary" id="save-admin">Save Admin</button>
+          </div>
+          <div id="admin-result" class="result-list"></div>
+        </div>
+
+        <div id="providers" class="section">
+          <h2>Providers</h2>
+          <p>Set the core runtime choices and write-only secrets. Existing secret values are never shown back.</p>
+          <div class="grid">
+            <div class="field">
+              <label for="storage-mode">Storage mode</label>
+              <select id="storage-mode">
+                <option value="local">local</option>
+                <option value="s3">s3</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="transcription-mode">Transcription mode</label>
+              <select id="transcription-mode">
+                <option value="local">local</option>
+                <option value="remote">remote</option>
+                <option value="openai">openai</option>
+                <option value="icad">icad</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="ai-provider">AI provider</label>
+              <select id="ai-provider">
+                <option value="ollama">ollama</option>
+                <option value="openai">openai</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="timezone">Timezone</label>
+              <input id="timezone" value="US/Eastern" />
+            </div>
+            <div class="field">
+              <label for="upload-key">Upload API key</label>
+              <input id="upload-key" type="password" placeholder="Write-only" />
+            </div>
+            <div class="field">
+              <label for="geocode-key">Geocoding API key</label>
+              <input id="geocode-key" type="password" placeholder="Google Maps or LocationIQ" />
+            </div>
+          </div>
+          <div class="actions">
+            <button class="primary" id="save-providers">Save Providers</button>
+            <button class="secondary" id="test-providers">Test Providers</button>
+          </div>
+          <div id="provider-result" class="result-list"></div>
+        </div>
+
+        <div id="finish" class="section">
+          <h2>Finish Setup</h2>
+          <p>Complete setup after the required account, upload key, geocoding, transcription, and storage settings are configured.</p>
+          <div class="actions">
+            <button class="primary" id="complete-setup">Complete Setup</button>
+            <a class="secondary" href="/">Open Map</a>
+            <a class="secondary" href="/settings">Open Settings</a>
+          </div>
+          <div id="finish-result" class="result-list"></div>
+        </div>
+      </section>
+    </div>
+  </main>
+  <script src="/setup.js"></script>
+</body>
+</html>

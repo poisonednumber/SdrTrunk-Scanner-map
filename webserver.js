@@ -2,6 +2,16 @@
 
 require('dotenv').config();
 const { loadConfig } = require('./src/config');
+const { applyMigrations } = require('./src/db/migrations');
+const { getJobSummary, getRecentJobs } = require('./src/jobs/processingJobs');
+const {
+  getSetupStatus,
+  markSetupComplete,
+  resolveSettings,
+  saveSecret,
+  saveSettings
+} = require('./src/settings/settingsService');
+const { runSetupChecks } = require('./src/setup/checks');
 const AWS = require('aws-sdk'); // Add AWS SDK
 
 const express = require('express');
@@ -45,11 +55,10 @@ const {
 
 const startupConfig = loadConfig(process.env);
 if (!startupConfig.isValid) {
-  console.error('ERROR: Invalid configuration:');
+  console.warn('WARNING: Configuration has issues. Setup mode will remain available:');
   for (const error of startupConfig.errors) {
-    console.error(`- ${error.key}: ${error.message}`);
+    console.warn(`- ${error.key}: ${error.message}`);
   }
-  process.exit(1);
 }
 
 // Validate required environment variables
@@ -57,14 +66,12 @@ const requiredVars = ['WEBSERVER_PORT', 'PUBLIC_DOMAIN'];
 const missingVars = requiredVars.filter(varName => !process.env[varName]);
 
 if (missingVars.length > 0) {
-  console.error(`ERROR: Missing required environment variables: ${missingVars.join(', ')}`);
-  process.exit(1);
+  console.warn(`WARNING: Missing environment variables: ${missingVars.join(', ')}. Setup mode will remain available.`);
 }
 
 // Check for at least one geocoding API key
 if (!GOOGLE_MAPS_API_KEY && !LOCATIONIQ_API_KEY) {
-  console.error('ERROR: At least one geocoding API key is required (GOOGLE_MAPS_API_KEY or LOCATIONIQ_API_KEY)');
-  process.exit(1);
+  console.warn('WARNING: No geocoding API key configured yet. Use /setup to configure Google Maps or LocationIQ.');
 }
 
 // Log geocoding API availability
@@ -127,18 +134,18 @@ app.get('/api/test', (req, res) => {
 let s3 = null;
 if (STORAGE_MODE === 's3') {
   if (!S3_ENDPOINT || !S3_BUCKET_NAME || !S3_ACCESS_KEY_ID || !S3_SECRET_ACCESS_KEY) {
-    console.error('FATAL: STORAGE_MODE is s3, but required S3 environment variables are missing! Check webserver .env');
-    process.exit(1); // Exit if S3 config is incomplete
+    console.warn('WARNING: STORAGE_MODE=s3, but S3 configuration is incomplete. Audio serving from S3 will be unavailable until setup is completed.');
+  } else {
+    AWS.config.update({
+      accessKeyId: S3_ACCESS_KEY_ID,
+      secretAccessKey: S3_SECRET_ACCESS_KEY,
+      endpoint: S3_ENDPOINT,
+      s3ForcePathStyle: true, // Necessary for MinIO/non-AWS S3
+      signatureVersion: 'v4'
+    });
+    s3 = new AWS.S3();
+    console.log(`[Webserver] Storage mode set to S3. Endpoint: ${S3_ENDPOINT}, Bucket: ${S3_BUCKET_NAME}`);
   }
-  AWS.config.update({
-    accessKeyId: S3_ACCESS_KEY_ID,
-    secretAccessKey: S3_SECRET_ACCESS_KEY,
-    endpoint: S3_ENDPOINT,
-    s3ForcePathStyle: true, // Necessary for MinIO/non-AWS S3
-    signatureVersion: 'v4'
-  });
-  s3 = new AWS.S3();
-  console.log(`[Webserver] Storage mode set to S3. Endpoint: ${S3_ENDPOINT}, Bucket: ${S3_BUCKET_NAME}`);
 } else {
   console.log('[Webserver] Storage mode set to local.');
 }
@@ -156,7 +163,7 @@ const server = http.createServer(app);
 const io = socketIo(server);
 
 // Database setup
-const db = new sqlite3.Database('./botdata.db', sqlite3.OPEN_READWRITE, (err) => {
+const db = new sqlite3.Database('./botdata.db', (err) => {
   if (err) {
     console.error('Error opening database', err.message);
   } else {
@@ -164,43 +171,23 @@ const db = new sqlite3.Database('./botdata.db', sqlite3.OPEN_READWRITE, (err) =>
   }
 });
 
-db.run(`ALTER TABLE transcriptions ADD COLUMN category TEXT`, err => {
-  // Ignore error if column already exists
-  if (!err || err.message.includes('duplicate column name')) {
-    console.log('Category column exists or was created successfully');
-  }
-});
-
-// Create authentication tables if authentication is enabled
-if (authEnabled) {
-  db.serialize(() => {
-    // Users table
-    db.run(`
-      CREATE TABLE IF NOT EXISTS users (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        username TEXT UNIQUE NOT NULL,
-        password_hash TEXT NOT NULL,
-        salt TEXT NOT NULL,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-      )
-    `);
-
-    // Sessions table
-    db.run(`
-      CREATE TABLE IF NOT EXISTS sessions (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER NOT NULL,
-        token TEXT UNIQUE NOT NULL,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        expires_at DATETIME NOT NULL,
-        last_activity DATETIME DEFAULT CURRENT_TIMESTAMP,
-        ip_address TEXT,
-        user_agent TEXT,
-        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-      )
-    `);
+const dbReady = applyMigrations(db, { enableAuth: true })
+  .then((applied) => {
+    if (applied.length > 0) {
+      console.log(`[Webserver] Applied migrations: ${applied.join(', ')}`);
+    }
+    return new Promise((resolve) => {
+      db.run(`ALTER TABLE transcriptions ADD COLUMN category TEXT`, err => {
+        if (!err || err.message.includes('duplicate column name')) {
+          console.log('Category column exists or was created successfully');
+        }
+        resolve();
+      });
+    });
+  })
+  .catch((err) => {
+    console.error('[Webserver] Error initializing database schema:', err);
   });
-}
 
 // Helper Functions for Authentication
 function hashPassword(password, salt) {
@@ -732,6 +719,128 @@ app.get('/audio/:id', async (req, res) => {
   }
 });
 
+app.get('/setup', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'setup.html'));
+});
+
+app.get('/settings', basicAuth, (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'settings.html'));
+});
+
+app.get('/api/setup/status', async (req, res) => {
+  await dbReady;
+  try {
+    const status = await getSetupStatus(db, process.env);
+    res.json(status);
+  } catch (err) {
+    console.error('Error fetching setup status:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+app.get('/api/setup/checks', async (req, res) => {
+  await dbReady;
+  try {
+    const checks = await runSetupChecks({ rootDir: __dirname, env: process.env });
+    res.json(checks);
+  } catch (err) {
+    console.error('Error running setup checks:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+app.post('/api/setup/admin', async (req, res) => {
+  await dbReady;
+  const { username = 'admin', password } = req.body || {};
+  if (username !== 'admin') {
+    return res.status(400).json({ error: 'The first setup user must be admin.' });
+  }
+  if (!password || password.length < 8) {
+    return res.status(400).json({ error: 'Admin password must be at least 8 characters.' });
+  }
+
+  try {
+    const existing = await new Promise((resolve, reject) => {
+      db.get('SELECT id FROM users WHERE username = ?', ['admin'], (err, row) => err ? reject(err) : resolve(row));
+    });
+    const salt = crypto.randomBytes(16).toString('hex');
+    const passwordHash = hashPassword(password, salt);
+
+    if (existing) {
+      db.run('UPDATE users SET password_hash = ?, salt = ? WHERE username = ?', [passwordHash, salt, 'admin'], (err) => {
+        if (err) return res.status(500).json({ error: 'Failed to update admin user' });
+        res.json({ ok: true, updated: true });
+      });
+    } else {
+      db.run('INSERT INTO users (username, password_hash, salt) VALUES (?, ?, ?)', ['admin', passwordHash, salt], (err) => {
+        if (err) return res.status(500).json({ error: 'Failed to create admin user' });
+        res.json({ ok: true, created: true });
+      });
+    }
+  } catch (err) {
+    console.error('Error creating setup admin:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+app.post('/api/setup/settings', async (req, res) => {
+  await dbReady;
+  try {
+    const result = await saveSettings(db, req.body || {}, 'setup');
+    res.json({ ok: true, result });
+  } catch (err) {
+    console.error('Error saving setup settings:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+app.post('/api/setup/secrets', async (req, res) => {
+  await dbReady;
+  const { key, value } = req.body || {};
+  try {
+    const result = await saveSecret(db, key, value, { actor: 'setup', env: process.env });
+    if (!result.ok) return res.status(400).json({ error: result.error });
+    res.json(result);
+  } catch (err) {
+    console.error('Error saving setup secret:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+app.post('/api/setup/test-provider', async (req, res) => {
+  await dbReady;
+  const { provider } = req.body || {};
+  try {
+    const checks = await runSetupChecks({ rootDir: __dirname, env: process.env });
+    const providerMap = {
+      geocoding: checks.geocodingProvider,
+      transcription: checks.transcriptionProvider,
+      ai: checks.aiProvider,
+      storage: checks.dataDir,
+      upload: checks.uploadEndpoint
+    };
+    res.json(providerMap[provider] || { ok: false, error: 'Unknown provider test' });
+  } catch (err) {
+    console.error('Error testing provider:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+app.post('/api/setup/complete', async (req, res) => {
+  await dbReady;
+  try {
+    const status = await getSetupStatus(db, process.env);
+    if (status.missing.length > 0) {
+      return res.status(400).json({ error: 'Setup is incomplete', missing: status.missing });
+    }
+    await markSetupComplete(db, 'setup');
+    res.json({ ok: true, setupComplete: true });
+  } catch (err) {
+    console.error('Error completing setup:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // Apply authentication middleware to protected routes if auth is enabled
 app.use(basicAuth);
 
@@ -820,6 +929,80 @@ app.get('/api/sessions/me', (req, res) => {
       res.json(sessions);
     }
   );
+});
+
+// Processing Job Diagnostics Routes (Admin Only when auth is enabled)
+app.get('/api/jobs/summary', adminAuth, async (req, res) => {
+  try {
+    const summary = await getJobSummary(db);
+    res.json(summary);
+  } catch (err) {
+    console.error('Error fetching job summary:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+app.get('/api/jobs/recent', adminAuth, async (req, res) => {
+  try {
+    const jobs = await getRecentJobs(db, {
+      limit: req.query.limit,
+      status: req.query.status,
+      jobType: req.query.jobType
+    });
+    res.json(jobs);
+  } catch (err) {
+    console.error('Error fetching recent jobs:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+app.get('/api/settings', adminAuth, async (req, res) => {
+  await dbReady;
+  try {
+    const settings = await resolveSettings(db, process.env);
+    res.json(settings);
+  } catch (err) {
+    console.error('Error fetching settings:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+app.put('/api/settings', adminAuth, async (req, res) => {
+  await dbReady;
+  try {
+    const result = await saveSettings(db, req.body || {}, req.user?.username || 'admin');
+    const requiresRestart = Object.values(result).some((item) => item.requiresRestart);
+    res.json({ ok: true, result, requiresRestart });
+  } catch (err) {
+    console.error('Error updating settings:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+app.put('/api/settings/secrets/:key', adminAuth, async (req, res) => {
+  await dbReady;
+  try {
+    const result = await saveSecret(db, req.params.key, req.body?.value, {
+      actor: req.user?.username || 'admin',
+      env: process.env
+    });
+    if (!result.ok) return res.status(400).json({ error: result.error });
+    res.json(result);
+  } catch (err) {
+    console.error('Error updating secret:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+app.get('/api/settings/checks', adminAuth, async (req, res) => {
+  await dbReady;
+  try {
+    const checks = await runSetupChecks({ rootDir: __dirname, env: process.env });
+    res.json(checks);
+  } catch (err) {
+    console.error('Error running settings checks:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
 });
 
 // User Management Routes (Admin Only when auth is enabled)
