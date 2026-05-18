@@ -4,6 +4,7 @@ require('dotenv').config();
 const { loadConfig } = require('./src/config');
 const { applyMigrations } = require('./src/db/migrations');
 const { normalizeIncomingCall } = require('./src/ingestion/normalizeCall');
+const { getRuntimeConfig, getSetupStatus } = require('./src/settings/settingsService');
 const {
   JOB_TYPES,
   createProcessingJob,
@@ -81,56 +82,28 @@ const {
 
 const startupConfig = loadConfig(process.env);
 if (!startupConfig.isValid) {
-  console.error('FATAL: Invalid configuration:');
+  console.warn('WARNING: Configuration has issues. Setup mode will remain available:');
   for (const error of startupConfig.errors) {
-    console.error(`- ${error.key}: ${error.message}`);
+    console.warn(`- ${error.key}: ${error.message}`);
   }
-  process.exit(1);
 }
-
-// --- VALIDATE AI-RELATED ENV VARS ---
-if (!AI_PROVIDER) {
-  console.error("FATAL: AI_PROVIDER is not set in the .env file. Please specify 'ollama' or 'openai'.");
-  process.exit(1);
-}
-
-if (AI_PROVIDER.toLowerCase() === 'openai') {
-  if (!OPENAI_API_KEY || !OPENAI_MODEL) {
-      console.error("FATAL: AI_PROVIDER is 'openai', but OPENAI_API_KEY or OPENAI_MODEL is missing in the .env file.");
-      process.exit(1);
-  }
-} else if (AI_PROVIDER.toLowerCase() === 'ollama') {
-  if (!OLLAMA_URL || !OLLAMA_MODEL) {
-      console.error("FATAL: AI_PROVIDER is 'ollama', but OLLAMA_URL or OLLAMA_MODEL is missing in the .env file.");
-      process.exit(1);
-  }
-} else {
-  console.error(`FATAL: Invalid AI_PROVIDER specified in .env file: '${AI_PROVIDER}'. Must be 'openai' or 'ollama'.`);
-  process.exit(1);
-}
-// --- END VALIDATION ---
 
 // --- VALIDATE TRANSCRIPTION-RELATED ENV VARS ---
 const effectiveTranscriptionMode = TRANSCRIPTION_MODE || 'local'; // Keep this to ensure a default
 if (!['local', 'remote', 'openai', 'icad'].includes(effectiveTranscriptionMode)) {
-  console.error(`FATAL: Invalid TRANSCRIPTION_MODE specified in .env file: '${TRANSCRIPTION_MODE}'. Must be 'local', 'remote', 'openai', or 'icad'.`);
-  process.exit(1);
+  console.warn(`WARNING: Invalid TRANSCRIPTION_MODE specified in .env file: '${TRANSCRIPTION_MODE}'. Use /setup to choose local, remote, openai, or icad.`);
 }
 if (effectiveTranscriptionMode === 'local' && !TRANSCRIPTION_DEVICE) {
-  console.error("FATAL: TRANSCRIPTION_MODE is 'local', but TRANSCRIPTION_DEVICE is missing in the .env file. Please set it to 'cuda' for a GPU or 'cpu' for CPU.");
-  process.exit(1);
+  console.warn("WARNING: TRANSCRIPTION_MODE is 'local', but TRANSCRIPTION_DEVICE is missing. Use /setup to choose cpu or cuda.");
 }
 if (effectiveTranscriptionMode === 'remote' && !FASTER_WHISPER_SERVER_URL) {
-  console.error("FATAL: TRANSCRIPTION_MODE is 'remote', but FASTER_WHISPER_SERVER_URL is missing in the .env file.");
-  process.exit(1);
+  console.warn("WARNING: TRANSCRIPTION_MODE is 'remote', but FASTER_WHISPER_SERVER_URL is missing. Use /setup to configure it.");
 }
 if (effectiveTranscriptionMode === 'openai' && !OPENAI_API_KEY) {
-  console.error("FATAL: TRANSCRIPTION_MODE is 'openai', but OPENAI_API_KEY is missing in the .env file. This is required for OpenAI transcriptions.");
-  process.exit(1);
+  console.warn("WARNING: TRANSCRIPTION_MODE is 'openai', but OPENAI_API_KEY is missing. Use /setup to configure it.");
 }
 if (effectiveTranscriptionMode === 'icad' && !ICAD_URL) {
-  console.error("FATAL: TRANSCRIPTION_MODE is 'icad', but ICAD_URL is missing in the .env file. Please set it to your ICAD API endpoint URL.");
-  process.exit(1);
+  console.warn("WARNING: TRANSCRIPTION_MODE is 'icad', but ICAD_URL is missing. Use /setup to configure it.");
 }
 // --- END VALIDATION ---
 
@@ -189,9 +162,7 @@ if (ENABLE_TWO_TONE_MODE && ENABLE_TWO_TONE_MODE.toLowerCase() === 'true') {
   
   const missingVars = requiredTwoToneVars.filter(varName => !process.env[varName]);
   if (missingVars.length > 0) {
-    console.error(`FATAL: Two-tone mode is enabled but missing required environment variables: ${missingVars.join(', ')}`);
-    console.error('Please add these variables to your .env file. See TWO_TONE_ENV_ADDITIONS.txt for the complete list.');
-    process.exit(1);
+    console.warn(`WARNING: Two-tone mode is enabled but missing required environment variables: ${missingVars.join(', ')}. Use /setup or .env to complete this before enabling bot services.`);
   }
 }
 
@@ -840,18 +811,18 @@ const AWS = require('aws-sdk');
 let s3 = null;
 if (STORAGE_MODE === 's3') {
   if (!S3_ENDPOINT || !S3_BUCKET_NAME || !S3_ACCESS_KEY_ID || !S3_SECRET_ACCESS_KEY) {
-    logger.error('FATAL: STORAGE_MODE is s3, but required S3 environment variables are missing! Check bot .env');
-    process.exit(1); // Exit if S3 config is incomplete
+    logger.warn('WARNING: STORAGE_MODE is s3, but required S3 environment variables are missing. Audio serving from S3 will be unavailable until setup is completed.');
+  } else {
+    AWS.config.update({
+      accessKeyId: S3_ACCESS_KEY_ID,
+      secretAccessKey: S3_SECRET_ACCESS_KEY,
+      endpoint: S3_ENDPOINT,
+      s3ForcePathStyle: true, // Necessary for MinIO/non-AWS S3
+      signatureVersion: 'v4'
+    });
+    s3 = new AWS.S3();
+    logger.info(`[Bot] Storage mode set to S3. Endpoint: ${S3_ENDPOINT}, Bucket: ${S3_BUCKET_NAME}`);
   }
-  AWS.config.update({
-    accessKeyId: S3_ACCESS_KEY_ID,
-    secretAccessKey: S3_SECRET_ACCESS_KEY,
-    endpoint: S3_ENDPOINT,
-    s3ForcePathStyle: true, // Necessary for MinIO/non-AWS S3
-    signatureVersion: 'v4'
-  });
-  s3 = new AWS.S3();
-  logger.info(`[Bot] Storage mode set to S3. Endpoint: ${S3_ENDPOINT}, Bucket: ${S3_BUCKET_NAME}`);
 } else {
   logger.info('[Bot] Storage mode set to local.');
 }
@@ -976,6 +947,21 @@ async function initializeDatabase() {
   }
 }
 
+async function getBotRuntimeConfig() {
+  return getRuntimeConfig(db, process.env);
+}
+
+async function getPublicAudioUrl(audioId) {
+  let publicDomain = PUBLIC_DOMAIN || 'localhost';
+  try {
+    const runtime = await getBotRuntimeConfig();
+    publicDomain = runtime.settings.publicDomain || publicDomain;
+  } catch (error) {
+    logger.warn(`Could not load runtime public domain; falling back to startup config: ${error.message}`);
+  }
+  return `http://${publicDomain}/audio/${audioId}`;
+}
+
 // Function to create admin user if authentication is enabled
 function createAdminUser() {
   return new Promise((resolve, reject) => {
@@ -1091,15 +1077,22 @@ async function initializeBot() {
     // Step 6: Create admin user for webserver if auth is enabled
     await createAdminUser();
 
-    // Step 7: Start bot services (Discord and Express API)
-    await startBotServices();
-
-    // Step 8: Start webserver last
-    if (WEBSERVER_PORT && (GOOGLE_MAPS_API_KEY || LOCATIONIQ_API_KEY)) {
+    // Step 7: Start webserver before Discord so setup can run even when bot settings are incomplete
+    if (WEBSERVER_PORT) {
       await startWebserver();
     } else {
-      logger.warn('Webserver not started: WEBSERVER_PORT or geocoding API key (GOOGLE_MAPS_API_KEY or LOCATIONIQ_API_KEY) not configured');
+      logger.warn('Webserver not started: WEBSERVER_PORT is not configured');
     }
+
+    // Step 8: In setup mode, keep the browser console available without forcing Discord login
+    const setupStatus = await getSetupStatus(db, process.env);
+    if (setupStatus.setupRequired) {
+      logger.warn(`Setup is incomplete (${setupStatus.missing.join(', ') || 'unknown requirements'}). Discord bot services will start after setup is completed and the app is restarted.`);
+      return true;
+    }
+
+    // Step 9: Start bot services (Discord and Express API)
+    await startBotServices();
 
     logger.info('Bot initialization completed successfully!');
     return true;
@@ -3920,7 +3913,7 @@ async function processMergedCallSegments(
     .trim();
   
   // Build combined transcription lines for Discord (all segments in one message)
-  const audioUrl = `http://${PUBLIC_DOMAIN}/audio/${transcriptionId}`;
+  const audioUrl = await getPublicAudioUrl(transcriptionId);
   const transcriptionLines = [];
   
   for (const segment of sortedSegments) {
@@ -4274,12 +4267,12 @@ function sendAlertMessage(
   callback
 ) {
   // Look up the audio_id from the database for this transcription
-  db.get('SELECT id FROM audio_files WHERE transcription_id = ?', [audioID], (err, row) => {
+  db.get('SELECT id FROM audio_files WHERE transcription_id = ?', [audioID], async (err, row) => {
     // Use transcription ID as fallback if audio ID not found
     const actualAudioID = (err || !row) ? audioID : row.id;
     
     // Create a URL for the audio file
-    const audioUrl = `http://${PUBLIC_DOMAIN}/audio/${actualAudioID}`;
+    const audioUrl = await getPublicAudioUrl(actualAudioID);
     
     // Log the IDs for debugging
     logger.info(`Alert - Transcription ID: ${audioID}, Audio ID: ${actualAudioID}, URL: ${audioUrl}`);
@@ -4514,7 +4507,7 @@ function sendTranscriptionMessage(
         }
 
         // Get or create the channel within the category
-        getOrCreateChannel(channelName, category.id, (channel) => {
+        getOrCreateChannel(channelName, category.id, async (channel) => {
           if (!channel) {
             logger.error('Failed to get or create channel.');
             if (callback) callback(); // Ensure callback is called even on error
@@ -4525,7 +4518,7 @@ function sendTranscriptionMessage(
           // Note: We use transcription ID (`audioID` parameter) for the URL now
           // as audio_files might get cleaned up.
           // The audio server route /audio/:id expects the transcription ID.
-          const audioUrl = `http://${PUBLIC_DOMAIN}/audio/${audioID}`;
+          const audioUrl = await getPublicAudioUrl(audioID);
 
           // Log the ID and URL for debugging
           logger.info(`Creating link for Transcription ID: ${audioID}, Audio URL: ${audioUrl}`);
@@ -5045,26 +5038,32 @@ Focus on providing insightful analysis of each transmission. The "description" f
 Include no other text besides this JSON.`;
 
     // Call the AI provider with a timeout
+    const runtime = await getBotRuntimeConfig();
+    const aiProvider = (runtime.settings.aiProvider || AI_PROVIDER || 'ollama').toLowerCase();
+    const openaiApiKey = runtime.secrets.openaiApiKey || OPENAI_API_KEY || '';
+    const openaiModel = runtime.settings.openaiModel || OPENAI_MODEL || 'gpt-4o-mini';
+    const ollamaUrl = runtime.settings.ollamaUrl || OLLAMA_URL || 'http://localhost:11434';
+    const ollamaModel = runtime.settings.ollamaModel || OLLAMA_MODEL || 'llama3.1:8b';
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 30000); // 30 second timeout
     let resultText = '';
     
     try {
-      if (AI_PROVIDER.toLowerCase() === 'openai') {
-        if (!OPENAI_API_KEY) {
+      if (aiProvider === 'openai') {
+        if (!openaiApiKey) {
             logger.error("[Bot] FATAL: AI_PROVIDER is set to openai, but OPENAI_API_KEY is not configured!");
             throw new Error("OpenAI API key is not configured.");
         }
-        logger.info(`[Bot] Generating summary with OpenAI model: ${OPENAI_MODEL}`);
+        logger.info(`[Bot] Generating summary with OpenAI model: ${openaiModel}`);
 
         const response = await fetch('https://api.openai.com/v1/chat/completions', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                'Authorization': `Bearer ${OPENAI_API_KEY}`
+                'Authorization': `Bearer ${openaiApiKey}`
             },
             body: JSON.stringify({
-                model: OPENAI_MODEL,
+                model: openaiModel,
                 messages: [{ role: 'user', content: commonPrompt }],
                 temperature: 0.3,
                 response_format: { type: "json_object" } // Request JSON output
@@ -5082,13 +5081,13 @@ Include no other text besides this JSON.`;
         }
 
       } else { // Default to Ollama
-        logger.info(`[Bot] Generating summary with Ollama model: ${OLLAMA_MODEL}`);
+        logger.info(`[Bot] Generating summary with Ollama model: ${ollamaModel}`);
 
-        const response = await fetch(`${OLLAMA_URL}/api/generate`, {
+        const response = await fetch(`${ollamaUrl}/api/generate`, {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
           body: JSON.stringify({
-            model: OLLAMA_MODEL,
+            model: ollamaModel,
             prompt: commonPrompt,
             stream: false
           }),
@@ -5347,7 +5346,7 @@ async function updateSummaryEmbed() {
     if (summary.highlights && summary.highlights.length > 0) {
       for (const highlight of summary.highlights) {
         // Get audio URL
-        const audioUrl = `http://${PUBLIC_DOMAIN}/audio/${highlight.id}`;
+        const audioUrl = await getPublicAudioUrl(highlight.id);
         
         // Fix timestamp display - use timestamp directly from database
         let timestampDisplay;
@@ -6226,8 +6225,13 @@ client.on('interactionCreate', async (interaction) => {
       const userQuestion = interaction.fields.getTextInputValue('ai_question');
 
       try {
-        // --- Read lookback from .env, default to 8 hours --- 
-        const askAiLookbackHours = parseFloat(ASK_AI_LOOKBACK_HOURS) || 8;
+        const runtime = await getBotRuntimeConfig();
+        const askAiLookbackHours = parseFloat(runtime.settings.askAiLookbackHours || ASK_AI_LOOKBACK_HOURS) || 8;
+        const aiProvider = (runtime.settings.aiProvider || AI_PROVIDER || 'ollama').toLowerCase();
+        const openaiApiKey = runtime.secrets.openaiApiKey || OPENAI_API_KEY || '';
+        const openaiModel = runtime.settings.openaiModel || OPENAI_MODEL || 'gpt-4o-mini';
+        const ollamaUrl = runtime.settings.ollamaUrl || OLLAMA_URL || 'http://localhost:11434';
+        const ollamaModel = runtime.settings.ollamaModel || OLLAMA_MODEL || 'llama3.1:8b';
         const now = new Date(); 
         const queryStartDate = new Date(now.getTime() - askAiLookbackHours * 60 * 60 * 1000); 
         // Convert start date to Unix seconds for the query
@@ -6328,20 +6332,20 @@ User Question: ${userQuestion}
 
         let aiResponseText = 'Error: Could not get response from AI.';
         try {
-            if (AI_PROVIDER.toLowerCase() === 'openai') {
-                if (!OPENAI_API_KEY) {
+            if (aiProvider === 'openai') {
+                if (!openaiApiKey) {
                     throw new Error("OpenAI API key is not configured.");
                 }
-                logger.info(`[Bot] Answering question with OpenAI model: ${OPENAI_MODEL}`);
+                logger.info(`[Bot] Answering question with OpenAI model: ${openaiModel}`);
 
                 const response = await fetch('https://api.openai.com/v1/chat/completions', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${OPENAI_API_KEY}`
+                        'Authorization': `Bearer ${openaiApiKey}`
                     },
                     body: JSON.stringify({
-                        model: OPENAI_MODEL,
+                        model: openaiModel,
                         messages: [{ role: 'user', content: commonPrompt }],
                         temperature: 0.5,
                         max_tokens: 500
@@ -6358,13 +6362,13 @@ User Question: ${userQuestion}
                 }
 
             } else { // Default to Ollama
-                logger.info(`[Bot] Answering question with Ollama model: ${OLLAMA_MODEL}`);
+                logger.info(`[Bot] Answering question with Ollama model: ${ollamaModel}`);
 
-                const response = await fetch(`${OLLAMA_URL}/api/generate`, {
+                const response = await fetch(`${ollamaUrl}/api/generate`, {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({
-                      model: OLLAMA_MODEL,
+                      model: ollamaModel,
                       prompt: commonPrompt,
                       stream: false,
                       options: { num_ctx: 35000 }
