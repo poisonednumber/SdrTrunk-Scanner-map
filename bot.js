@@ -382,8 +382,8 @@ function cleanStaleQueueEntries() {
 
 function detectTwoTone(audioFilePath, transcriptionId, talkGroupID, callback) {
   // For non-local modes, use a separate Python process for tone detection
-  if (effectiveTranscriptionMode !== 'local') {
-    logger.info(`Using standalone tone detection for ${effectiveTranscriptionMode} mode`);
+  if (activeTranscriptionMode !== 'local') {
+    logger.info(`Using standalone tone detection for ${activeTranscriptionMode} mode`);
     return detectTwoToneStandalone(audioFilePath, transcriptionId, talkGroupID, callback);
   }
   
@@ -951,6 +951,25 @@ async function getBotRuntimeConfig() {
   return getRuntimeConfig(db, process.env);
 }
 
+async function getBotTranscriptionConfig() {
+  const runtime = await getBotRuntimeConfig();
+  const mode = (runtime.settings.transcriptionMode || TRANSCRIPTION_MODE || 'local').toLowerCase();
+
+  return {
+    mode: ['local', 'remote', 'openai', 'icad'].includes(mode) ? mode : 'local',
+    device: (runtime.settings.transcriptionDevice || TRANSCRIPTION_DEVICE || 'cpu').toLowerCase(),
+    fasterWhisperServerUrl: runtime.settings.fasterWhisperServerUrl || FASTER_WHISPER_SERVER_URL || '',
+    whisperModel: runtime.settings.whisperModel || WHISPER_MODEL || 'large-v3',
+    openaiApiKey: runtime.secrets.openaiApiKey || OPENAI_API_KEY || '',
+    openaiTranscriptionPrompt: runtime.settings.openaiTranscriptionPrompt || OPENAI_TRANSCRIPTION_PROMPT || '',
+    openaiTranscriptionModel: runtime.settings.openaiTranscriptionModel || OPENAI_TRANSCRIPTION_MODEL || 'whisper-1',
+    openaiTranscriptionTemperature: runtime.settings.openaiTranscriptionTemperature || OPENAI_TRANSCRIPTION_TEMPERATURE || '0.0',
+    icadUrl: runtime.settings.icadUrl || ICAD_URL || '',
+    icadProfile: runtime.settings.icadProfile || ICAD_PROFILE || 'whisper-1',
+    icadApiKey: runtime.secrets.icadApiKey || ICAD_API_KEY || ''
+  };
+}
+
 async function getPublicAudioUrl(audioId) {
   let publicDomain = PUBLIC_DOMAIN || 'localhost';
   try {
@@ -1159,6 +1178,7 @@ let isBootComplete = false;
 const messageCache = new Map(); // Stores the latest message for each channel
 const MESSAGE_COOLDOWN = 15000; // 15 seconds in milliseconds
 let transcriptionProcess = null;
+let activeTranscriptionMode = effectiveTranscriptionMode;
 let isProcessingTranscription = false;
 let currentTranscriptionId = null; // Track current transcription for timeout
 let transcriptionTimeout = null; // Timeout for current transcription
@@ -1811,12 +1831,12 @@ app.get('/audio/:id', (req, res) => {
 // Function to start the transcription process
 // Function to start the transcription process
 async function startTranscriptionProcess() {
-  // *** ADD THIS CHECK AT THE TOP ***
-  if (effectiveTranscriptionMode !== 'local') {
+  const transcriptionConfig = await getBotTranscriptionConfig();
+  activeTranscriptionMode = transcriptionConfig.mode;
+  if (transcriptionConfig.mode !== 'local') {
     logger.info('Transcription mode is not local, skipping Python process start.');
-    return; // Don't start if mode is remote
+    return;
   }
-  // *** END ADDED CHECK ***
 
   // Clean up existing process if it exists
   if (transcriptionProcess) {
@@ -2162,7 +2182,7 @@ async function startTranscriptionProcess() {
   transcriptionProcess.on('error', (err) => {
     logger.error(`Failed to start local transcription process: ${err.message}`);
     cleanupTranscriptionProcess();
-    if (effectiveTranscriptionMode === 'local') {
+    if (activeTranscriptionMode === 'local') {
         logger.info('Will attempt to restart local transcription process in 10 seconds due to spawn error...');
         setTimeout(startTranscriptionProcess, 10000);
     }
@@ -2340,7 +2360,7 @@ async function startTranscriptionProcess() {
     cleanupTranscriptionProcess();
 
     // Only restart if not too many recent failures
-    if (effectiveTranscriptionMode === 'local') {
+    if (activeTranscriptionMode === 'local') {
       if (code === null) {
         // For null exit codes (startup crashes), wait longer and provide guidance
         logger.error('STARTUP CRASH DETECTED - Will NOT automatically restart to prevent loop');
@@ -2459,14 +2479,14 @@ function startProcessHealthCheck() {
     if (timeSinceActivity > 600000 && queueSize > 0) { // 10 minutes + queue items = real problem
       logger.error(`Transcription process appears stuck (no activity for 10 minutes with ${queueSize} items queued). Restarting...`);
       cleanupTranscriptionProcess();
-      if (effectiveTranscriptionMode === 'local') {
+      if (activeTranscriptionMode === 'local') {
         setTimeout(startTranscriptionProcess, 5000);
       }
       return;
     } else if (timeSinceActivity > 1800000) { // 30 minutes with no activity at all (safety net)
       logger.warn(`Very long radio silence detected (30+ minutes). Performing health check restart as precaution...`);
       cleanupTranscriptionProcess();
-      if (effectiveTranscriptionMode === 'local') {
+      if (activeTranscriptionMode === 'local') {
         setTimeout(startTranscriptionProcess, 5000);
       }
       return;
@@ -2492,7 +2512,7 @@ function startProcessHealthCheck() {
     if (queueSize > 15 && !isProcessingTranscription && timeSinceActivity > 300000) { // 5 minutes + 15+ items = real stuck
       logger.error(`Queue definitely stuck with ${queueSize} items and no processing for 5 minutes. Force restarting transcription process...`);
       cleanupTranscriptionProcess();
-      if (effectiveTranscriptionMode === 'local') {
+      if (activeTranscriptionMode === 'local') {
         setTimeout(startTranscriptionProcess, 2000);
       }
     }
@@ -2559,7 +2579,7 @@ function processNextTranscription() {
     logger.error(`Transcription timeout for ID ${currentTranscriptionId}. Restarting process...`);
     // Force restart the process on timeout
     cleanupTranscriptionProcess();
-    if (effectiveTranscriptionMode === 'local') {
+    if (activeTranscriptionMode === 'local') {
       setTimeout(startTranscriptionProcess, 5000);
     }
   }, TRANSCRIPTION_TIMEOUT_MS);
@@ -2593,8 +2613,10 @@ function processNextTranscription() {
 
 // *** NEW FUNCTION for Remote Transcription ***
 async function transcribeAudioRemotely(filePath, callback) {
+  const transcriptionConfig = await getBotTranscriptionConfig();
+
   // Ensure URL is configured for remote mode
-  if (!FASTER_WHISPER_SERVER_URL) {
+  if (!transcriptionConfig.fasterWhisperServerUrl) {
     logger.error('FATAL: FASTER_WHISPER_SERVER_URL is not configured for remote mode.');
     if (callback) callback(""); // Fail gracefully
     return;
@@ -2626,14 +2648,14 @@ async function transcribeAudioRemotely(filePath, callback) {
     const form = new FormData();
     form.append('file', fs.createReadStream(filePath));
     // Append model if specified in environment
-    if (WHISPER_MODEL) {
-      form.append('model', WHISPER_MODEL);
-      logger.info(`Requesting remote model: ${WHISPER_MODEL}`);
+    if (transcriptionConfig.whisperModel) {
+      form.append('model', transcriptionConfig.whisperModel);
+      logger.info(`Requesting remote model: ${transcriptionConfig.whisperModel}`);
     }
     // Add language parameter if needed
     // form.append('language', 'en');
 
-    const apiEndpoint = `${FASTER_WHISPER_SERVER_URL}/v1/audio/transcriptions`;
+    const apiEndpoint = `${transcriptionConfig.fasterWhisperServerUrl}/v1/audio/transcriptions`;
     const filenameForLog = path.basename(filePath);
     logger.info(`Sending remote transcription request for ${filenameForLog} to ${apiEndpoint}`);
 
@@ -2695,8 +2717,10 @@ async function transcribeAudioRemotely(filePath, callback) {
 }
 
 async function transcribeWithOpenAIAPI(filePath, callback) {
+  const transcriptionConfig = await getBotTranscriptionConfig();
+
   // Check for API Key
-  if (!OPENAI_API_KEY) {
+  if (!transcriptionConfig.openaiApiKey) {
     logger.error('FATAL: TRANSCRIPTION_MODE is openai, but OPENAI_API_KEY is not configured.');
     if (callback) callback(""); // Fail gracefully
     return;
@@ -2714,21 +2738,21 @@ async function transcribeWithOpenAIAPI(filePath, callback) {
     form.append('file', fs.createReadStream(filePath));
     
     // Use the model from environment variable, fallback to whisper-1 if not set
-    const modelToUse = OPENAI_TRANSCRIPTION_MODEL || 'whisper-1';
+    const modelToUse = transcriptionConfig.openaiTranscriptionModel;
     form.append('model', modelToUse);
     
     // Force language to English for better scanner audio transcription
     form.append('language', 'en');
     
     // Add temperature parameter for transcription consistency (if supported)
-    const temperature = OPENAI_TRANSCRIPTION_TEMPERATURE || '0.0';
+    const temperature = transcriptionConfig.openaiTranscriptionTemperature;
     form.append('temperature', temperature);
     
     const filenameForLog = path.basename(filePath);
     
     // Add custom prompt if configured to improve scanner audio transcription
-    if (OPENAI_TRANSCRIPTION_PROMPT) {
-      form.append('prompt', OPENAI_TRANSCRIPTION_PROMPT);
+    if (transcriptionConfig.openaiTranscriptionPrompt) {
+      form.append('prompt', transcriptionConfig.openaiTranscriptionPrompt);
       logger.info(`Using custom OpenAI transcription prompt for ${filenameForLog}`);
     }
     
@@ -2747,7 +2771,7 @@ async function transcribeWithOpenAIAPI(filePath, callback) {
          method: 'POST',
          body: form,
          headers: {
-             'Authorization': `Bearer ${OPENAI_API_KEY}`,
+             'Authorization': `Bearer ${transcriptionConfig.openaiApiKey}`,
              ...form.getHeaders()
          },
          signal: controller.signal
@@ -2785,8 +2809,10 @@ async function transcribeWithOpenAIAPI(filePath, callback) {
 }
 
 async function transcribeWithICADAPI(filePath, callback) {
+  const transcriptionConfig = await getBotTranscriptionConfig();
+
   // Check for ICAD URL
-  if (!ICAD_URL) {
+  if (!transcriptionConfig.icadUrl) {
     logger.error('FATAL: TRANSCRIPTION_MODE is icad, but ICAD_URL is not configured.');
     if (callback) callback(""); // Fail gracefully
     return;
@@ -2804,7 +2830,7 @@ async function transcribeWithICADAPI(filePath, callback) {
     form.append('file', fs.createReadStream(filePath));
     
     // Set model based on ICAD_PROFILE if provided, otherwise use default
-    const modelToUse = ICAD_PROFILE || 'whisper-1';
+    const modelToUse = transcriptionConfig.icadProfile;
     form.append('model', modelToUse);
     
     // Add standard OpenAI Whisper API parameters that ICAD should understand
@@ -2814,9 +2840,9 @@ async function transcribeWithICADAPI(filePath, callback) {
     // Explicitly disable clip_timestamps to override any profile settings
     form.append('clip_timestamps', '');
 
-    const apiEndpoint = `${ICAD_URL}/v1/audio/transcriptions`;
+    const apiEndpoint = `${transcriptionConfig.icadUrl}/v1/audio/transcriptions`;
     const filenameForLog = path.basename(filePath);
-    const authStatus = ICAD_API_KEY ? 'with authentication' : 'without authentication';
+    const authStatus = transcriptionConfig.icadApiKey ? 'with authentication' : 'without authentication';
     logger.info(`Sending ICAD transcription request for ${filenameForLog} to ${apiEndpoint} using model/profile: ${modelToUse} (${authStatus})`);
 
     const controller = new AbortController();
@@ -2830,8 +2856,8 @@ async function transcribeWithICADAPI(filePath, callback) {
     };
     
     // Add authorization header if ICAD_API_KEY is provided
-    if (ICAD_API_KEY) {
-      headers['Authorization'] = `Bearer ${ICAD_API_KEY}`;
+    if (transcriptionConfig.icadApiKey) {
+      headers['Authorization'] = `Bearer ${transcriptionConfig.icadApiKey}`;
     }
 
     const response = await fetch(apiEndpoint, {
@@ -3029,6 +3055,7 @@ function handleNewAudio(audioData) {
 
         const transcriptionId = this.lastID; // Get the ID from the database insert
         let transcriptionJobId = null;
+        const transcriptionConfig = await getBotTranscriptionConfig();
         logger.info(`Created transcription record ID ${transcriptionId} using storage path: ${storagePath}`);
 
         try {
@@ -3038,7 +3065,7 @@ function handleNewAudio(audioData) {
             payload: {
               filename,
               talkGroupID,
-              transcriptionMode: effectiveTranscriptionMode,
+              transcriptionMode: transcriptionConfig.mode,
               storageMode: STORAGE_MODE
             }
           });
@@ -3147,7 +3174,7 @@ function handleNewAudio(audioData) {
                     };
                     
                     // Transcribe based on mode (use the same mode as the main call)
-                    const segmentTranscriptionMode = effectiveTranscriptionMode || 'local';
+                    const segmentTranscriptionMode = transcriptionConfig.mode;
                     if (segmentTranscriptionMode === 'openai') {
                       transcribeWithOpenAIAPI(segment.audioPath, segmentCallback);
                     } else if (segmentTranscriptionMode === 'remote') {
@@ -3275,20 +3302,20 @@ function handleNewAudio(audioData) {
             // --- End common callback definition ---
 
             // --- Choose transcription method based on mode ---
-            logger.info(`Initiating transcription for ID ${transcriptionId} using mode: ${effectiveTranscriptionMode}`);
+            logger.info(`Initiating transcription for ID ${transcriptionId} using mode: ${transcriptionConfig.mode}`);
             if (transcriptionJobId) {
               safelyUpdateProcessingJob('mark transcription job processing', () => markJobProcessing(db, transcriptionJobId));
             }
 
-            if (effectiveTranscriptionMode === 'openai') {
+            if (transcriptionConfig.mode === 'openai') {
                 // OpenAI API transcription mode
                 const pathToUse = (STORAGE_MODE === 'local') ? finalPathIfLocal : tempPath;
                 transcribeWithOpenAIAPI(pathToUse, processingCallback);
-            } else if (effectiveTranscriptionMode === 'remote') {
+            } else if (transcriptionConfig.mode === 'remote') {
                 // Use the remote function for faster-whisper server
                 const pathToUseForRemote = (STORAGE_MODE === 'local') ? finalPathIfLocal : tempPath;
                 transcribeAudioRemotely(pathToUseForRemote, processingCallback);
-            } else if (effectiveTranscriptionMode === 'icad') {
+            } else if (transcriptionConfig.mode === 'icad') {
                 // ICAD API transcription mode (OpenAI-compatible interface)
                 const pathToUse = (STORAGE_MODE === 'local') ? finalPathIfLocal : tempPath;
                 transcribeWithICADAPI(pathToUse, processingCallback);
@@ -5976,11 +6003,12 @@ client.once('ready', async () => {
   startSummaryScheduler();
   
   // Start transcription process if needed
-  if (effectiveTranscriptionMode === 'local') {
+  const transcriptionConfig = await getBotTranscriptionConfig();
+  if (transcriptionConfig.mode === 'local') {
     logger.info('Initializing local transcription process...');
     startTranscriptionProcess();
   } else {
-    logger.info(`Transcription mode set to '${effectiveTranscriptionMode}'. Local Python process will not be started.`);
+    logger.info(`Transcription mode set to '${transcriptionConfig.mode}'. Local Python process will not be started.`);
   }
   
   isBootComplete = true;

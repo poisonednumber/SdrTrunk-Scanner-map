@@ -2,9 +2,10 @@ const normalKeys = [
   'publicDomain', 'timezone', 'summaryLookbackHours', 'askAiLookbackHours',
   'mappedTalkGroups', 'enableMappedTalkGroups', 'storageMode', 'transcriptionMode',
   'transcriptionDevice', 'aiProvider', 'ollamaUrl', 'ollamaModel', 'openaiModel',
-  'fasterWhisperServerUrl'
+  'fasterWhisperServerUrl', 'whisperModel', 'openaiTranscriptionPrompt',
+  'openaiTranscriptionModel', 'openaiTranscriptionTemperature', 'icadUrl', 'icadProfile'
 ];
-const secretKeys = ['uploadApiKey', 'googleMapsApiKey', 'locationIqApiKey', 'openaiApiKey'];
+const secretKeys = ['uploadApiKey', 'googleMapsApiKey', 'locationIqApiKey', 'openaiApiKey', 'icadApiKey'];
 
 function showStep(id) {
   document.querySelectorAll('.section').forEach((section) => section.classList.toggle('active', section.id === id));
