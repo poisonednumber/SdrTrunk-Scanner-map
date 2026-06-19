@@ -259,58 +259,38 @@ function escapeRegExp(string) {
 async function extractAddressWithLLM(transcript, town) {
   try {
     const countiesString = TARGET_COUNTIES.join(', ');
-    const commonPrompt = `
-You are an assistant that extracts and completes addresses from first responder dispatch transcripts.
-Focus on extracting a single full address, block, or intersection from the transcript provided below.
-If an address is incomplete, attempt to complete it based on the given town.
-Only extract addresses for ${town}.
-The address could be in one of these counties: ${countiesString}.
-${TARGET_CITIES.length ? `Known cities/towns in the coverage area: ${TARGET_CITIES.join(', ')}.\nWhen completing a partial address, prefer the city actually named in the transcript; otherwise use the most likely city from this list.` : ''}
+    const commonPrompt = `You extract the incident LOCATION from a first-responder dispatch transcript.
+The transcript mixes radio codes, unit numbers, call types, and chatter together with the address — ignore the codes and find the location of the incident.
 
-VERY IMPORTANT INSTRUCTIONS:
-1. If no valid street name, intersection, or specific place (like a mall or park name) is clearly mentioned in the transcript, respond with exactly "No address found". A sequence of numbers alone (e.g., "5-9-1-6-9") is NOT enough; a street name or named location from the transcript must accompany it.
-2. DO NOT make up or hallucinate addresses or street names that aren't clearly mentioned in the transcript.
-3. DO NOT include ANY notes, comments, explanations, or parentheticals in your response.
-4. Respond with ONLY the address in one line, nothing else.
-5. The town "${GEOCODING_CITY}" should ONLY be used to COMPLETE a partially extracted address (e.g., if "123 Main Street" is found, you can append ", ${GEOCODING_CITY}, ${GEOCODING_STATE}"). DO NOT use "${GEOCODING_CITY}" if no other address components are found.
+What counts as a location: a street with a house number, an intersection of two streets, or a specific named place (mall, park, school, hospital, building).
+What does NOT count: bare numbers, unit IDs (e.g. "ALS-742", "Engine 7"), call types, or radio chatter with no street/place name.
 
-Be extremely strict - only extract if there are actual street names or specific, named locations present in the text. Isolated numbers are not sufficient.
-Phrases like "Copy following it" or general chatter should ALWAYS result in "No address found".
-If the transcript says, for example, "units respond to 7-9-0-8 Cindy Lane", then extract "7908 Cindy Lane". However, if it only says "reference 7-9-0-8", respond with "No address found".
-When in doubt, respond with "No address found" rather than guessing.
+Rules:
+- Normalize spelled-out or hyphenated house numbers ("7-9-0-8 Cindy Lane" -> "7908 Cindy Lane").
+- "Cross street X" / "cross of X" names the nearby cross street; the MAIN address is the street that has the house number.
+- Never invent a street that is not spoken in the transcript.
+- Only add ", ${GEOCODING_CITY}, ${GEOCODING_STATE}" to complete an address that has a street but no city. Never output the city/state alone.
+- Coverage counties: ${countiesString}.
+${TARGET_CITIES.length ? `- Known cities/towns: ${TARGET_CITIES.join(', ')}. Prefer a city actually named in the transcript; otherwise pick the most likely one from this list.` : ''}
 
-Valid examples (assuming ${town} is the target and the street/place is mentioned in the transcript):
-- "123 Main Street"
-- "Main Street and Park Avenue" (intersection)
-- "300 block of Maple Drive"
-- "Fire reported at the Town Center Mall"
-- "Elm Street" (if street name is clearly mentioned as a location for an incident)
+Formatting:
+- Full address: 123 Main St, ${GEOCODING_CITY}, ${GEOCODING_STATE}
+- Block ("300 block of Maple Dr") -> 300 Maple Dr, ${GEOCODING_CITY}, ${GEOCODING_STATE}
+- Intersection: use "&" between the two streets -> Main St & Oak Ave, ${GEOCODING_CITY}, ${GEOCODING_STATE}
 
-Invalid examples (respond "No address found"):
-- "Copy that"
-- "Unit 5 responding"
-- "Can you repeat that?"
-- "We're on our way"
-- "Copy following it"
-- "10-4 received"
-- "Just the city name like '${GEOCODING_CITY}'"
-- "5916" (if no street name follows in the transcript)
+Respond with ONLY the location on one line (for example: 7908 Cindy Lane, ${GEOCODING_CITY}, ${GEOCODING_STATE}), or exactly: No address found
+Do not wrap the answer in quotes and do not add any commentary.
 
-Format full addresses as: "123 Main St, Town, ${GEOCODING_STATE}".
-Format blocks as: "100 block of Main St, Town, ${GEOCODING_STATE}" into "100 Main St, Town, ${GEOCODING_STATE}".
-Format intersections as: "Main St & Oak Ave, Town, ${GEOCODING_STATE}".
-
-From ${town}:
-"${transcript}"
-
-Respond with ONLY the address in one line, no commentary or explanation. If no address, respond exactly: No address found.`;
+Transcript (from ${town}):
+"${transcript}"`;
 
     // Add AbortController for timeout
     const controller = new AbortController();
+    const AI_TIMEOUT_MS = parseInt(process.env.AI_EXTRACT_TIMEOUT_MS, 10) || 30000;
     const timeoutId = setTimeout(() => {
-        logger.warn(`[Geocoding] AI request timed out after 15 seconds for address extraction.`);
+        logger.warn(`[Geocoding] AI request timed out after ${AI_TIMEOUT_MS / 1000}s for address extraction.`);
         controller.abort();
-    }, 15000); // 15s timeout
+    }, AI_TIMEOUT_MS);
 
     let extractedAddress = '';
 
@@ -354,7 +334,16 @@ Respond with ONLY the address in one line, no commentary or explanation. If no a
           body: JSON.stringify({
             model: OLLAMA_MODEL,
             prompt: commonPrompt,
-            stream: false
+            stream: false,
+            // Disable chain-of-thought for reasoning models (qwen3, deepseek-r1, …).
+            // Address extraction is a simple task; thinking just adds 8-15s/call
+            // (which blows the timeout) and is no more accurate. Unknown to older
+            // Ollama builds, which harmlessly ignore the field.
+            think: false,
+            // Deterministic, low-creativity decoding for reliable extraction.
+            // Without this, Ollama uses the model default (~0.8) and the same
+            // transcript intermittently yields "No address found".
+            options: { temperature: 0, top_p: 0.1, num_predict: 800 }
           }),
           signal: controller.signal
         });
@@ -369,14 +358,24 @@ Respond with ONLY the address in one line, no commentary or explanation. If no a
     
     clearTimeout(timeoutId);
 
-    // --- ADDED: Remove <think> block --- 
-    const thinkBlockRegex = /<think>[\s\S]*?<\/think>\s*/; // Corrected escaping
+    // --- ADDED: Remove <think> block (reasoning models: qwen3, deepseek-r1, …) ---
+    // Some Ollama builds also return reasoning in a separate "thinking" field and
+    // leave only the answer in "response"; in that case there's nothing to strip.
+    const thinkBlockRegex = /<think>[\s\S]*?<\/think>\s*/gi;
     extractedAddress = extractedAddress.replace(thinkBlockRegex, '').trim();
+    // If a think block was truncated (open tag, no close), drop everything after it.
+    const openThink = extractedAddress.search(/<think>/i);
+    if (openThink >= 0) extractedAddress = extractedAddress.slice(0, openThink).trim();
     // --- END ADDED ---
+
+    // Strip surrounding quotes the model sometimes adds (e.g. "7908 Cindy Lane, ...")
+    // and collapse to a single line; otherwise the literal quotes break geocoding.
+    extractedAddress = extractedAddress.split('\n')[0].trim();
+    extractedAddress = extractedAddress.replace(/^["'`]+|["'`]+$/g, '').trim();
 
     logger.info(`LLM Extracted Address: \"${extractedAddress}\"`);
 
-    if (extractedAddress === "No address found" || extractedAddress === "No address found.") {
+    if (/^no address found\.?$/i.test(extractedAddress)) {
       return null;
     }
 
