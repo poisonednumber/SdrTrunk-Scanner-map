@@ -1,0 +1,717 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Scanner Map</title>
+
+  <!-- Leaflet Core -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <!-- MarkerCluster -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.4.1/dist/MarkerCluster.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.4.1/dist/MarkerCluster.Default.css" />
+  <script src="https://unpkg.com/leaflet.markercluster@1.4.1/dist/leaflet.markercluster.js"></script>
+
+  <!-- Other Libraries -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.3.2/socket.io.js"></script>
+  <script src="https://unpkg.com/wavesurfer.js"></script>
+  <script src="https://unpkg.com/leaflet.heat/dist/leaflet-heat.js"></script>
+
+  <!-- Custom CSS -->
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="icon" type="image/x-icon" href="/favicon.ico" />
+
+  <!-- Inline Styles -->
+  <style>
+    .center-controls {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .search-heatmap-container {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    #search-input {
+      flex: 1;
+      min-width: 200px;
+      max-width: 300px;
+    }
+
+    .heatmap-controls {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      white-space: nowrap;
+    }
+
+    #heatmap-intensity-container {
+      min-width: 100px;
+      margin-left: 10px;
+    }
+
+    .sessions-list {
+      max-height: 400px;
+      overflow-y: auto;
+      margin: 15px 0;
+    }
+
+    .session-item {
+      padding: 12px;
+      margin-bottom: 10px;
+      border: 1px solid var(--border-color);
+      border-radius: 4px;
+      background-color: var(--background-color);
+    }
+
+    .session-info {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+    }
+
+    .session-details {
+      flex-grow: 1;
+      padding-right: 15px;
+    }
+
+    .session-actions {
+      display: flex;
+      gap: 10px;
+    }
+
+    .terminate-session-btn {
+      background-color: #330000;
+      color: #ff0000;
+      border: 1px solid #ff0000;
+      padding: 5px 10px;
+      cursor: pointer;
+      border-radius: 4px;
+      font-family: 'Share Tech Mono', monospace;
+      transition: all 0.3s;
+    }
+
+    .terminate-session-btn:hover {
+      background-color: #ff0000;
+      color: var(--background-color);
+      box-shadow: 0 0 10px #ff0000;
+    }
+
+    .current-session {
+      border: 1px solid var(--primary-color);
+      box-shadow: 0 0 5px var(--primary-color);
+    }
+
+    .device-info {
+      margin-top: 8px;
+      font-size: 0.9em;
+      opacity: 0.8;
+    }
+
+    .user-selection {
+      margin-bottom: 15px;
+    }
+
+    .user-selection label {
+      margin-right: 10px;
+      font-weight: bold;
+    }
+
+    @media screen and (max-width: 768px) {
+      .search-heatmap-container {
+        flex-direction: column;
+        width: 100%;
+        align-items: stretch;
+      }
+
+      #search-input {
+        width: 100%;
+        max-width: none;
+        margin-bottom: 10px;
+      }
+
+      .heatmap-controls {
+        width: 100%;
+        justify-content: space-between;
+        flex-wrap: wrap;
+      }
+
+      #heatmap-intensity-container {
+        width: 100%;
+        margin-left: 0;
+        margin-top: 5px;
+      }
+
+      .session-info {
+        flex-direction: column;
+      }
+
+      .session-actions {
+        margin-top: 10px;
+        width: 100%;
+        justify-content: flex-end;
+      }
+
+      .session-details {
+        padding-right: 0;
+      }
+    }
+
+    /* Styles for Global Volume Control */
+    .global-volume-controls {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 8px; /* Add space below heatmap controls */
+      width: 100%; /* Take full width in its container */
+      justify-content: center; /* Center items */
+    }
+
+    .global-volume-controls label {
+      font-size: 14px;
+      color: var(--text-color);
+      white-space: nowrap;
+    }
+
+    #global-volume {
+      width: 100%;
+      max-width: 200px; /* Limit slider width */
+      height: 8px;
+    }
+
+    /* Adjust global volume layout for mobile */
+    .global-volume-controls {
+      margin-top: 5px;
+      padding: 0 5px; /* Add padding */
+    }
+    .global-volume-controls label {
+      font-size: 12px; /* Smaller label */
+    }
+    #global-volume {
+      max-width: 150px; /* Shorter slider on mobile */
+    }
+
+    /* --- Live Feed Display Styles --- */
+    #live-feed-display {
+      position: fixed;
+      bottom: 200px; /* Adjust based on control panel height, especially mobile */
+      left: 50%;
+      transform: translateX(-50%);
+      width: 90%;
+      max-width: 500px;
+      max-height: 150px; /* Approx 5 lines */
+      background-color: rgba(0, 0, 0, 0.85);
+      color: var(--text-color);
+      border: 1px solid var(--border-color);
+      border-radius: 4px;
+      box-shadow: 0 0 15px rgba(0, 255, 0, 0.5);
+      z-index: 997; /* Below control panel/modals, above map */
+      overflow: hidden; /* Prevent scrollbars */
+      display: flex;
+      flex-direction: column-reverse; /* Newest items appear at the bottom and push upwards */
+      padding: 5px;
+      box-sizing: border-box;
+      pointer-events: none; /* Allow clicks to pass through to map */
+      transition: bottom 0.3s ease-in-out; /* For mobile positioning */
+    }
+
+    .live-feed-item {
+      padding: 4px 8px;
+      margin-bottom: 3px; /* Space between items */
+      font-family: 'Share Tech Mono', monospace;
+      font-size: 14px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      background-color: rgba(0, 20, 0, 0.7); /* Slight background */
+      border-radius: 3px;
+      opacity: 1;
+      transition: opacity 1.5s ease-out; /* Slower fade out */
+      border-left: 2px solid var(--primary-color); /* Indicator */
+    }
+
+    .live-feed-item.fading-out {
+      opacity: 0;
+    }
+
+    .live-feed-item strong {
+        color: #00ccff; /* Highlight talkgroup name */
+        margin-right: 5px;
+    }
+
+    /* Mobile adjustment for live feed display position */
+    @media screen and (max-width: 768px) {
+        #live-feed-display {
+            bottom: 190px; /* Position above the taller mobile control panel */
+            max-width: calc(100% - 20px); /* Adjust width for mobile */
+            max-height: 120px; /* Slightly shorter on mobile */
+        }
+        .live-feed-item {
+            font-size: 12px; /* Smaller font on mobile */
+        }
+    }
+    @media screen and (max-width: 480px) {
+        #live-feed-display {
+           bottom: 190px; /* May need further adjustment if control panel grows */
+        }
+    }
+    /* --- END Live Feed Display Styles --- */
+
+    /* --- Live Feed Setup Modal Styles --- */
+    .live-feed-modal-content {
+      width: 90%;
+      max-width: 500px; /* Adjust width as needed */
+      max-height: 85vh; /* Limit height */
+      display: flex;
+      flex-direction: column;
+    }
+
+    .live-feed-modal-content h2 {
+      text-align: center;
+      margin-bottom: 15px;
+      text-shadow: 0 0 8px var(--primary-color);
+    }
+
+    #live-feed-search {
+        width: 100%;
+        padding: 8px 10px;
+        background-color: #000;
+        color: #00ff00;
+        border: 1px solid #00ff00;
+        border-radius: 4px;
+        font-family: 'Share Tech Mono', monospace;
+        font-size: 14px;
+        box-sizing: border-box;
+        margin-bottom: 15px;
+    }
+
+    .live-feed-master-controls {
+        display: flex;
+        justify-content: space-around;
+        padding: 10px 0;
+        margin-bottom: 15px;
+        border-top: 1px solid rgba(0, 255, 0, 0.2);
+        border-bottom: 1px solid rgba(0, 255, 0, 0.2);
+    }
+
+    .live-feed-master-controls label {
+        display: inline-flex;
+        align-items: center;
+        cursor: pointer;
+        font-size: 14px;
+        color: var(--text-color);
+    }
+
+    .live-feed-master-controls input[type="checkbox"] {
+        margin-right: 8px;
+        accent-color: var(--primary-color);
+        width: 16px;
+        height: 16px;
+    }
+
+    #live-feed-talkgroup-list {
+      flex-grow: 1; /* Allow list to take available space */
+      overflow-y: auto; /* Enable scrolling */
+      padding-right: 10px; /* Space for scrollbar */
+      margin-bottom: 15px;
+      border: 1px solid rgba(0, 255, 0, 0.2);
+      padding: 5px;
+      min-height: 200px; /* Ensure it has some height */
+    }
+
+    /* Scrollbar for talkgroup list */
+    #live-feed-talkgroup-list::-webkit-scrollbar {
+      width: 10px;
+    }
+
+    #live-feed-talkgroup-list::-webkit-scrollbar-track {
+      background: rgba(0, 0, 0, 0.3);
+      border-radius: 5px;
+    }
+
+    #live-feed-talkgroup-list::-webkit-scrollbar-thumb {
+      background-color: var(--primary-color);
+      border-radius: 5px;
+      border: 2px solid rgba(0, 0, 0, 0.3);
+    }
+
+    #live-feed-talkgroup-list {
+      scrollbar-width: thin;
+      scrollbar-color: var(--primary-color) rgba(0, 0, 0, 0.3);
+    }
+
+    .live-feed-tg-item {
+      display: flex;
+      align-items: center;
+      padding: 8px 5px;
+      margin-bottom: 3px;
+      border-radius: 3px;
+      transition: background-color 0.2s;
+      cursor: pointer;
+    }
+
+    .live-feed-tg-item:hover {
+        background-color: rgba(0, 51, 0, 0.2);
+    }
+
+    .live-feed-tg-item input[type="checkbox"] {
+        margin-right: 10px;
+        accent-color: var(--primary-color);
+        flex-shrink: 0;
+        width: 15px;
+        height: 15px;
+    }
+
+    .live-feed-tg-item label {
+        font-size: 14px;
+        color: var(--text-color);
+        flex-grow: 1;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    /* --- END Live Feed Setup Modal Styles --- */
+
+    /* Google Places Autocomplete Styling */
+    .pac-container {
+      background-color: #000 !important;
+      border: 1px solid #00ff00 !important;
+      border-radius: 4px !important;
+      box-shadow: 0 0 10px rgba(0, 255, 0, 0.3) !important;
+      font-family: 'Share Tech Mono', monospace !important;
+    }
+
+    .pac-item {
+      background-color: #000 !important;
+      color: #00ff00 !important;
+      border: none !important;
+      padding: 8px 12px !important;
+      cursor: pointer !important;
+    }
+
+    .pac-item:hover {
+      background-color: rgba(0, 255, 0, 0.1) !important;
+    }
+
+    .pac-item-selected {
+      background-color: rgba(0, 255, 0, 0.2) !important;
+    }
+
+    .pac-item-query {
+      color: #00ff00 !important;
+      font-weight: bold !important;
+    }
+
+    .pac-matched {
+      color: #00ccff !important;
+    }
+
+    .pac-icon {
+      filter: invert(1) hue-rotate(120deg) brightness(1.5) !important;
+    }
+  </style>
+</head>
+
+<body>
+  <button id="sidebar-toggle-btn" aria-label="Toggle Category Sidebar">☰ Categories</button>
+  <div id="map"></div>
+
+  <div id="category-sidebar">
+    <div class="category-header">Categories</div>
+    <div id="category-list"></div>
+  </div>
+
+  <div id="control-panel">
+     <div class="left-controls">
+      <select id="time-filter">
+        <option value="1">Last 1 hour</option>
+        <option value="3">Last 3 hours</option>
+        <option value="6">Last 6 hours</option>
+        <option value="12" selected>Last 12 hours</option>
+        <option value="24">Last 24 hours</option>
+        <option value="48">Last 2 days</option>
+        <option value="168">Last 7 days</option>
+        <option value="custom">Custom range</option>
+      </select>
+      <button id="toggle-mode">Day/Night</button>
+      <button id="live-feed-setup-btn">Live Feed</button>
+      </div>
+
+    <div id="new-call-banner" class="hidden">
+      New call from: <span id="talkgroup-name"></span><span class="ellipsis"></span>
+    </div>
+
+    <div class="center-controls">
+      <div class="search-heatmap-container">
+        <input type="text" id="search-input" placeholder="Search Calls..." />
+        <div class="heatmap-controls">
+          <label for="enable-heatmap">
+            <input type="checkbox" id="enable-heatmap" />
+            Enable Heatmap
+          </label>
+          <div id="heatmap-intensity-container">
+            <input type="range" id="heatmap-intensity" min="1" max="10" value="5" />
+          </div>
+          <div id="global-volume-container" class="global-volume-controls">
+            <label for="global-volume">Volume:</label>
+            <input type="range" id="global-volume" class="volume" min="0" max="1" step="0.05" value="0.5" />
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="right-controls">
+      <div class="controls-checkbox-group">
+        <label for="mute-new-calls">
+          <input type="checkbox" id="mute-new-calls" />
+          Mute New Calls
+        </label>
+        <label for="track-new-calls">
+          <input type="checkbox" id="track-new-calls" checked />
+          Track New Calls
+        </label>
+      </div>
+      <div class="user-management-dropdown">
+        <button id="user-menu-btn" class="cyberpunk-button">Settings</button>
+        <div id="user-menu-content" class="dropdown-content">
+          <a href="/settings" target="_blank" rel="noopener">⚙️ Settings &amp; Health</a>
+          <a href="/settings#users" target="_blank" rel="noopener">👤 Users</a>
+          <a href="/settings#sessions" target="_blank" rel="noopener">🔐 Sessions</a>
+          <a href="/settings#call-purge" target="_blank" rel="noopener">🧹 Call Purge</a>
+          <a href="/settings#discord-tools" target="_blank" rel="noopener">💬 Discord Tools</a>
+          <a href="/settings#manual-plot" target="_blank" rel="noopener">📍 Manual Plot</a>
+          <a href="/settings#maintenance" target="_blank" rel="noopener">🛠️ Maintenance</a>
+          <a href="/settings#updates" target="_blank" rel="noopener">⬆️ Updates</a>
+        </div>
+      </div>
+    </div>
+     </div>
+
+  <div id="summary-bar">
+    <div class="ticker-wrap"><div class="ticker"></div></div>
+  </div>
+<div id="custom-time-modal" class="modal">
+    <div class="modal-content">
+      <h2>Select Custom Time Range</h2>
+      <div class="form-group"><label>Start Date:</label><input type="date" id="custom-start-date" /></div>
+      <div class="form-group"><label>Start Time:</label><input type="time" id="custom-start-time" /></div>
+      <div class="form-group"><label>End Date:</label><input type="date" id="custom-end-date" /></div>
+      <div class="form-group"><label>End Time:</label><input type="time" id="custom-end-time" /></div>
+      <div class="modal-buttons">
+        <button onclick="applyCustomTimeFilter()" class="confirm-btn">Apply</button>
+        <button type="button" class="cancel-btn" onclick="document.getElementById('custom-time-modal').style.display='none'">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="add-user-modal" class="modal">
+    <div class="modal-content">
+      <h2>Add New User</h2>
+      <form id="add-user-form">
+        <div class="form-group"><label>Username:</label><input type="text" id="new-username" required /></div>
+        <div class="form-group"><label>Password:</label><input type="password" id="new-password" required /></div>
+        <div class="modal-buttons">
+          <button type="submit" class="confirm-btn">Add User</button>
+          <button type="button" class="cancel-btn" onclick="document.getElementById('add-user-modal').style.display='none'">Cancel</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div id="view-users-modal" class="modal">
+    <div class="modal-content">
+      <h2>Manage Users</h2>
+      <div id="users-list" class="users-list">Loading...</div>
+      <div class="modal-buttons">
+          <button type="button" class="cancel-btn" onclick="document.getElementById('view-users-modal').style.display='none'">Close</button>
+        </div>
+    </div>
+  </div>
+
+  <div id="sessions-modal" class="modal">
+    <div class="modal-content">
+      <h2>Active Sessions</h2>
+      <div class="user-selection">
+        <label for="user-dropdown">Select User:</label>
+        <select id="user-dropdown" class="styled-select"></select>
+      </div>
+      <div id="sessions-list" class="sessions-list">Loading...</div>
+      <div class="modal-buttons">
+          <button type="button" class="cancel-btn" onclick="document.getElementById('sessions-modal').style.display='none'">Close</button>
+        </div>
+    </div>
+  </div>
+
+  <!-- Call Purge Modal -->
+  <div id="call-purge-modal" class="modal">
+    <div class="modal-content call-purge-modal-content">
+      <h2>Call Purge</h2>
+      <p class="purge-description">Remove calls from the map while preserving all call information. Selected calls will no longer appear on the map but remain in the database.</p>
+      
+      <div class="form-group">
+        <label for="purge-talkgroup-search">Search Talkgroups:</label>
+        <input type="text" id="purge-talkgroup-search" placeholder="Start typing..." />
+      </div>
+      
+      <div id="purge-talkgroup-list" class="purge-talkgroup-list">
+        <div class="loading-placeholder">Loading talkgroups...</div>
+      </div>
+      
+      <div class="form-group">
+        <label for="purge-category-select">Category:</label>
+        <select id="purge-category-select" class="styled-select">
+          <option value="">All Categories</option>
+        </select>
+      </div>
+      
+      <div class="form-group">
+        <label>Time Range:</label>
+        <div class="time-range-options">
+          <button type="button" class="time-preset-btn" data-hours="1">Last 1 hour</button>
+          <button type="button" class="time-preset-btn" data-hours="3">Last 3 hours</button>
+          <button type="button" class="time-preset-btn" data-hours="6">Last 6 hours</button>
+          <button type="button" class="time-preset-btn" data-hours="12">Last 12 hours</button>
+          <button type="button" class="time-preset-btn" data-hours="24">Last 24 hours</button>
+          <button type="button" class="time-preset-btn" data-hours="48">Last 2 days</button>
+          <button type="button" class="time-preset-btn" data-hours="168">Last 7 days</button>
+        </div>
+        <div class="custom-time-section">
+          <label for="purge-custom-time-toggle">
+            <input type="checkbox" id="purge-custom-time-toggle" />
+            Custom Time Range
+          </label>
+          <div id="purge-custom-time-inputs" class="custom-time-inputs" style="display: none;">
+            <div class="time-input-row">
+              <div class="time-input-group">
+                <label for="purge-start-date">Start Date:</label>
+                <input type="date" id="purge-start-date" />
+              </div>
+              <div class="time-input-group">
+                <label for="purge-start-time">Start Time:</label>
+                <input type="time" id="purge-start-time" />
+              </div>
+            </div>
+            <div class="time-input-row">
+              <div class="time-input-group">
+                <label for="purge-end-date">End Date:</label>
+                <input type="date" id="purge-end-date" />
+              </div>
+              <div class="time-input-group">
+                <label for="purge-end-time">End Time:</label>
+                <input type="time" id="purge-end-time" />
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      
+      <div class="modal-buttons">
+        <button type="button" id="purge-confirm-btn" class="confirm-btn">Purge Calls</button>
+        <button type="button" id="undo-last-purge-btn" class="undo-btn" style="display: none;">Undo Last Purge</button>
+        <button type="button" class="cancel-btn" onclick="document.getElementById('call-purge-modal').style.display='none'">Cancel</button>
+      </div>
+    </div>
+  </div>
+  <!-- END Call Purge Modal -->
+  
+  <!-- Call Purge Confirmation Modal -->
+  <div id="purge-confirmation-modal" class="modal">
+    <div class="modal-content confirmation-modal-content">
+      <h2>Confirm Call Purge</h2>
+      <div id="purge-confirmation-message" class="confirmation-message">
+        <!-- Message will be populated by JavaScript -->
+      </div>
+      <div class="modal-buttons">
+        <button type="button" id="purge-confirm-yes" class="confirm-btn">Yes, Purge Calls</button>
+        <button type="button" id="purge-confirm-no" class="cancel-btn">Cancel</button>
+      </div>
+    </div>
+  </div>
+  <!-- END Call Purge Confirmation Modal -->
+  
+  <div id="audio-container" style="display: none;"></div>
+
+  <!-- Talkgroup History Modal -->
+  <div id="talkgroup-modal" class="modal">
+    <div class="modal-content talkgroup-modal-content">
+      <h2 id="talkgroup-modal-title">Talkgroup History</h2>
+
+      <!-- Autoplay Toggle -->
+      <div class="talkgroup-modal-controls">
+        <label for="talkgroup-autoplay-toggle" id="talkgroup-autoplay-label">
+          <input type="checkbox" id="talkgroup-autoplay-toggle" />
+          <span>Autoplay New Calls</span>
+        </label>
+      </div>
+      <!-- End Autoplay Toggle -->
+
+      <div id="talkgroup-list" class="talkgroup-list">
+        <!-- Transcription items will be loaded here -->
+        <div class="loading-placeholder">Loading history...</div>
+      </div>
+      <div class="modal-buttons">
+        <button type="button" class="cancel-btn" onclick="closeTalkgroupModal()">Close</button>
+      </div>
+    </div>
+  </div>
+  <!-- END Talkgroup History Modal -->
+
+  <!-- NEW: Live Feed Setup Modal -->
+  <div id="live-feed-modal" class="modal">
+      <div class="modal-content live-feed-modal-content">
+          <h2>Live Feed Setup</h2>
+
+          <div class="form-group">
+              <label for="live-feed-search">Search Talkgroups:</label>
+              <input type="text" id="live-feed-search" placeholder="Start typing..." />
+          </div>
+
+          <div class="live-feed-master-controls">
+              <!-- REMOVED AUDIO ENABLE CHECKBOX -->
+              <!--
+              <label>
+                  <input type="checkbox" id="live-feed-audio-enable" />
+                  Enable Live Audio
+              </label>
+              -->
+          </div>
+
+          <div id="live-feed-talkgroup-list">
+              <div class="loading-placeholder">Loading talkgroups...</div>
+          </div>
+
+          <div class="modal-buttons">
+              <button type="button" class="cancel-btn" onclick="closeLiveFeedModal()">Close</button>
+          </div>
+      </div>
+  </div>
+  <!-- END Live Feed Setup Modal -->
+
+  <!-- NEW: Live Feed Display Area -->
+  <div id="live-feed-display">
+  </div>
+  <!-- END Live Feed Display Area -->
+
+  <script src="config.js"></script>
+  <script src="app.js" defer></script>
+
+  <script>
+    // NOTE: The map itself uses Leaflet + OpenStreetMap tiles (no Google Maps
+    // JS needed). Address autocomplete now goes through the server-side proxy
+    // (/api/geocode/search), so no API key is loaded in the browser anymore.
+
+    // Placeholder function to close the new modal (will be defined in app.js)
+    function closeLiveFeedModal() {
+      const modal = document.getElementById('live-feed-modal');
+      if (modal) {
+          modal.style.display = 'none';
+      }
+    }
+  </script>
+</body>
+</html>

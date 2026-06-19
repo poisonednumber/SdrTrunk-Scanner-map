@@ -1,0 +1,63 @@
+###############################################################################
+# Scanner Map - Docker Compose
+#
+# Quick start:
+#   docker compose up -d
+#   open http://localhost:8080/setup
+#
+# Audio, database, logs and models persist in named volumes / bind mounts.
+###############################################################################
+
+services:
+  scanner-map:
+    build:
+      context: .
+      args:
+        # Use "cu121" (or "cu118") for an NVIDIA CUDA build instead of CPU.
+        TORCH_VARIANT: cpu
+    image: scanner-map:latest
+    container_name: scanner-map
+    restart: unless-stopped
+    ports:
+      - "8080:8080"   # web interface / setup wizard
+      - "3306:3306"   # SDRTrunk / TrunkRecorder / rdio-scanner upload endpoint
+    env_file:
+      - .env
+    volumes:
+      - ./.env:/app/.env
+      - scanner_audio:/app/audio
+      - scanner_data:/app/data
+      - scanner_db:/app/dbdata
+      - scanner_logs:/app/logs
+      - scanner_models:/app/models
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+
+  # Optional: self-hosted S3-compatible storage for testing the s3/minio backend.
+  # Enable with:  docker compose --profile minio up -d
+  minio:
+    image: minio/minio:latest
+    container_name: scanner-minio
+    profiles: ["minio"]
+    command: server /data --console-address ":9001"
+    restart: unless-stopped
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: scannermap
+      MINIO_ROOT_PASSWORD: scannermap-secret
+    volumes:
+      - scanner_minio:/data
+
+volumes:
+  scanner_audio:
+  scanner_data:
+  scanner_db:
+  scanner_logs:
+  scanner_models:
+  scanner_minio:

@@ -1,0 +1,57 @@
+{
+  "name": "scanner-map",
+  "version": "2.0.0",
+  "description": "Real-time emergency scanner mapping system: ingests SDRTrunk/TrunkRecorder/rdio-scanner calls, transcribes audio with AI, geocodes locations, and displays live calls on an interactive web map with optional Discord integration.",
+  "type": "commonjs",
+  "main": "bot.js",
+  "scripts": {
+    "start": "node start.js",
+    "start:bot": "node bot.js",
+    "web": "node webserver.js",
+    "migrate": "node scripts/migrate.js",
+    "reset-setup": "node scripts/reset-setup.js",
+    "import-talkgroups": "node import_csv.js",
+    "lint": "eslint . --ext .js",
+    "lint:fix": "eslint . --ext .js --fix",
+    "check": "node scripts/syntax-check.js",
+    "docker:build": "docker build -t scanner-map .",
+    "docker:up": "docker compose up -d",
+    "docker:down": "docker compose down"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.726.0",
+    "@aws-sdk/lib-storage": "^3.726.0",
+    "@aws-sdk/s3-request-presigner": "^3.726.0",
+    "@discordjs/opus": "^0.9.0",
+    "@discordjs/voice": "^0.18.0",
+    "bcryptjs": "^2.4.3",
+    "busboy": "^1.6.0",
+    "compression": "^1.7.5",
+    "cors": "^2.8.5",
+    "csv-parser": "^3.0.0",
+    "discord.js": "^14.16.3",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "express-rate-limit": "^7.5.0",
+    "form-data": "^4.0.1",
+    "helmet": "^8.0.0",
+    "libsodium-wrappers": "^0.7.15",
+    "moment-timezone": "^0.5.46",
+    "multer": "^2.0.1",
+    "node-cache": "^5.1.2",
+    "node-fetch": "^2.7.0",
+    "prism-media": "^1.3.5",
+    "sanitize-html": "^2.14.0",
+    "socket.io": "^4.8.1",
+    "sqlite3": "^5.1.7",
+    "uuid": "^9.0.1",
+    "winston": "^3.17.0"
+  },
+  "devDependencies": {
+    "eslint": "^8.57.1"
+  },
+  "license": "MIT"
+}

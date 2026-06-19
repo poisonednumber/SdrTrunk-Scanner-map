@@ -1,0 +1,45 @@
+# Dependencies
+node_modules/
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# Secrets & local config
+.env
+.env.local
+.env.*.local
+.env.bak
+data/apikeys.json
+data/apikeys.plain.json
+
+# Backups (may contain secrets or live data)
+*.bak
+botdata.db.bak-*
+*.db.bak-*
+
+# Runtime data
+botdata.db
+botdata.db-journal
+botdata.db-wal
+botdata.db-shm
+audio/
+models/
+logs/
+*.log
+combined.log
+error.log
+
+# Build / OS
+dist/
+build/
+.DS_Store
+Thumbs.db
+*.tmp
+
+# Editor
+.vscode/
+.idea/
+
+# Setup wizard lock (created once initial setup completes)
+.setup-complete

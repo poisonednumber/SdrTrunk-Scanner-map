@@ -1,0 +1,23 @@
+node_modules/
+.venv/
+venv/
+__pycache__/
+*.pyc
+.git/
+.gitignore
+*.log
+combined.log
+error.log
+logs/
+audio/
+models/
+botdata.db*
+.env
+.env.local
+data/apikeys.json
+.setup-complete
+Windows installer/
+Linux installer/
+test/
+*.md
+.eslintcache

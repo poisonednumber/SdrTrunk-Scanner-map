@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Scanner Map - Settings</title>
+  <link rel="icon" href="/favicon.ico" />
+  <link rel="stylesheet" href="/setup/setup.css" />
+  <link rel="stylesheet" href="/settings/settings.css" />
+  <style>
+    .nav-footer a { color: var(--primary); text-decoration: none; }
+    .nav-footer a:hover { text-decoration: underline; }
+    .back-map-btn {
+      display: block; width: 100%; text-align: center; box-sizing: border-box;
+      margin: 0 0 18px; font-size: 15px;
+    }
+  </style>
+</head>
+<body>
+  <div class="wizard">
+    <aside class="wizard-nav">
+      <div class="brand">
+        <span class="brand-mark">⚙️</span>
+        <div>
+          <div class="brand-title">Scanner Map</div>
+          <div class="brand-sub">Settings</div>
+        </div>
+      </div>
+      <a href="/" class="btn btn-primary back-map-btn">🗺️ Back to Map</a>
+      <ol id="step-nav" class="step-nav"></ol>
+      <div class="nav-footer">v2.0 &middot; <a href="/">← Back to map</a></div>
+    </aside>
+
+    <main class="wizard-main">
+      <div id="step-container" class="step-container"></div>
+      <div class="wizard-actions">
+        <button id="btn-back" class="btn btn-ghost" type="button">Back</button>
+        <div class="spacer"></div>
+        <span id="save-indicator" class="save-indicator"></span>
+        <button id="btn-next" class="btn btn-primary" type="button">Save Changes</button>
+      </div>
+    </main>
+  </div>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <script>window.SCANNER_SETTINGS_MODE = true;</script>
+  <script src="/setup/setup.js"></script>
+</body>
+</html>

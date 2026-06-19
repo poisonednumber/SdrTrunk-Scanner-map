@@ -1,0 +1,21 @@
+# Scanner Map - Python dependencies
+# Used by transcribe.py (persistent faster-whisper worker) and tone_detect.py
+#
+# PyTorch is intentionally NOT pinned here because the correct build depends on
+# your hardware (CPU vs CUDA version). Install it separately first:
+#
+#   CPU only:
+#     pip install torch torchvision torchaudio
+#   NVIDIA CUDA 12.1:
+#     pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+#   NVIDIA CUDA 11.8:
+#     pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+#
+# Then: pip install -r requirements.txt
+
+faster-whisper>=1.0.0
+pydub>=0.25.1
+python-dotenv>=1.0.0
+numpy>=1.24.0,<2.0.0
+icad-tone-detection>=1.0.0
+boto3>=1.34.0          # optional: only needed for S3/R2/B2 audio sources in tone detection

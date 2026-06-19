@@ -1,0 +1,14 @@
+node_modules/
+.venv/
+audio/
+logs/
+models/
+# Legacy monoliths are validated via `npm run check` (node --check). They predate
+# the lint config and would produce overwhelming noise; lint focuses on src/.
+bot.js
+webserver.js
+geocoding.js
+import_csv.js
+public/app.js
+public/config.js
+test/

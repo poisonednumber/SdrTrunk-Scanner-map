@@ -1,0 +1,84 @@
+/* Settings page theme override — retro black/green terminal, matching the map. */
+@import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap');
+
+:root {
+  --bg: #000000;
+  --panel: #030803;
+  --panel-2: #061006;
+  --border: #0f8f0f;
+  --text: #00ff66;
+  --muted: #2a9d4a;
+  --primary: #00ff66;
+  --primary-hover: #00cc55;
+  --success: #39ff14;
+  --danger: #ff3b3b;
+  --warn: #d7ff00;
+  --radius: 4px;
+  --glow: 0 0 6px rgba(0, 255, 102, 0.55);
+}
+
+body {
+  font-family: 'Share Tech Mono', ui-monospace, Menlo, Consolas, monospace !important;
+  background:
+    repeating-linear-gradient(0deg, rgba(0, 255, 80, 0.035) 0px, rgba(0, 255, 80, 0.035) 1px, transparent 1px, transparent 3px),
+    radial-gradient(1200px 600px at 80% -10%, #021a06 0%, #000 60%) !important;
+  color: var(--text);
+}
+
+/* Sidebar */
+.wizard-nav { background: #010401; border-right: 1px solid var(--border); box-shadow: inset -1px 0 0 rgba(0,255,80,.15); }
+.brand-title { color: var(--text); text-shadow: var(--glow); letter-spacing: 1px; }
+.brand-sub, .nav-footer { color: var(--muted); }
+.brand-mark { filter: drop-shadow(0 0 4px #0f0); }
+.step-nav li { color: var(--muted); border: 1px solid transparent; }
+.step-nav li:hover { border-color: rgba(0,255,80,.25); }
+.step-nav li .dot { background: #020a02; border: 1px solid var(--border); color: var(--text); }
+.step-nav li.active { background: #051505; color: var(--text); border-color: var(--border); box-shadow: var(--glow); }
+.step-nav li.active .dot { background: var(--primary); border-color: var(--primary); color: #001a06; box-shadow: var(--glow); }
+.step-nav li.done .dot { background: #003311; border-color: var(--border); color: var(--text); }
+
+/* Headings */
+.step h1 { color: var(--text); text-shadow: var(--glow); text-transform: uppercase; letter-spacing: 2px; }
+.step h1::before { content: '> '; color: var(--primary); }
+.step .lead { color: var(--muted); }
+
+/* Inputs */
+input[type=text], input[type=password], input[type=number], select, textarea {
+  background: #020a02; border: 1px solid var(--border); color: var(--text);
+  border-radius: var(--radius); box-shadow: inset 0 0 8px rgba(0,255,80,.08);
+}
+input:focus, select:focus, textarea:focus { border-color: var(--primary); box-shadow: var(--glow); }
+.field label { color: var(--text); text-transform: uppercase; font-size: 12px; letter-spacing: 1px; }
+.field .hint, .hint { color: var(--muted); }
+
+/* Buttons */
+.btn {
+  background: #020a02; border: 1px solid var(--border); color: var(--text);
+  border-radius: var(--radius); text-transform: uppercase; letter-spacing: 1px;
+}
+.btn:hover { background: #052105; box-shadow: var(--glow); }
+.btn-primary { background: #00ff66; border-color: #00ff66; color: #001a06; font-weight: 700; box-shadow: var(--glow); }
+.btn-primary:hover { background: #00cc55; }
+.btn-danger { border-color: var(--danger); color: var(--danger); }
+.btn-danger:hover { background: rgba(255,59,59,.12); box-shadow: 0 0 6px rgba(255,59,59,.5); }
+
+/* Surfaces */
+.wizard-actions { background: #010401; border-top: 1px solid var(--border); }
+.card, .gpu-box, .health-list li, .tg-table-wrap, .apikey-card {
+  background: #030f03; border-color: var(--border);
+}
+.card.selected { border-color: var(--primary); box-shadow: var(--glow); }
+.infobox { background: rgba(0,255,80,.05); border-color: var(--border); border-left-color: var(--primary); }
+.infobox.warn { border-left-color: var(--warn); background: rgba(215,255,0,.06); }
+.infobox a, .geo-result, .city-chip { color: var(--text); }
+.geo-result { background: #020a02; border-color: var(--border); }
+.geo-result:hover { border-color: var(--primary); background: #052105; }
+th { background: #010401; color: var(--text); text-transform: uppercase; }
+th, td { border-color: rgba(0,255,80,.2); }
+.badge.set { color: var(--success); border-color: var(--success); }
+.install-log { background: #000; border-color: var(--border); color: #39ff14; }
+code { background: #041004; border-color: var(--border); color: var(--text); }
+.city-chip { background: #030f03; border-color: var(--border); }
+.toast { background: #030f03; border-color: var(--border); color: var(--text); box-shadow: var(--glow); }
+.save-indicator { color: var(--success); }
+::selection { background: #00ff66; color: #001a06; }
