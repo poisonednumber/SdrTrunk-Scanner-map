@@ -3494,9 +3494,15 @@ function handleNewAudio(audioData) {
               );
               logger.info(`Stored audio for ID ${transcriptionId} in ${storage.type}: ${storagePath}`);
               if (STORAGE_IS_LOCAL) {
-                // File now lives in the audio dir; temp copy is redundant.
-                fs.unlink(tempPath, () => {});
-                afterStorageComplete(path.join(storage.baseDir, storagePath));
+                const finalLocal = path.join(storage.baseDir, storagePath);
+                // The upload is written straight into the audio dir, so tempPath
+                // is usually the SAME file as the stored destination. Only delete
+                // it when it's a genuinely separate temp copy — otherwise we'd be
+                // deleting the very file the transcriber is about to read.
+                if (path.resolve(tempPath) !== path.resolve(finalLocal)) {
+                  fs.unlink(tempPath, () => {});
+                }
+                afterStorageComplete(finalLocal);
               } else {
                 // Remote object storage: keep temp file for transcription input.
                 afterStorageComplete(null);
@@ -4605,9 +4611,11 @@ function sendTranscriptionMessage(
       }
 
       if (!row) {
-        logger.error(`No talk group found for ID: ${talkGroupID} (system: ${sysKey || 'n/a'})`);
-        if (callback) callback(); // Ensure callback is called even on error
-        return;
+        // Talkgroup isn't in the imported CSV(s). Rather than dropping the call,
+        // fall back to the name the scanner provided so it still posts to Discord.
+        // (Import this talkgroup's CSV for proper county/category mapping.)
+        logger.warn(`Talkgroup ${talkGroupID} (system: ${sysKey || 'n/a'}) not in DB — posting under "Uncategorized" using scanner-provided name. Import its CSV for proper mapping.`);
+        row = { alpha_tag: talkGroupName || `TG ${talkGroupID}`, county: null };
       }
 
       const fullTalkGroupName = row.alpha_tag || talkGroupName || `TG ${talkGroupID}`; // Use provided name as fallback

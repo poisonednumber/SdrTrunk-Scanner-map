@@ -43,3 +43,6 @@ Thumbs.db
 
 # Setup wizard lock (created once initial setup completes)
 .setup-complete
+
+# Runtime-generated AI summary (regenerated on the fly)
+public/summary.json
