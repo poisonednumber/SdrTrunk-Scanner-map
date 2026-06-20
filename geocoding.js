@@ -250,6 +250,217 @@ function escapeRegExp(string) {
   return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+/** Street-type tokens — used for format checks and transcript anchoring. */
+const STREET_SUFFIX_WORDS = new Set([
+  'st', 'street', 'ave', 'avenue', 'rd', 'road', 'dr', 'drive', 'ln', 'lane',
+  'blvd', 'boulevard', 'pkwy', 'parkway', 'hwy', 'highway', 'way', 'circle',
+  'cir', 'court', 'ct', 'place', 'pl', 'terrace', 'trl', 'trail', 'loop',
+  'run', 'row', 'crossing', 'xing', 'square', 'sq', 'block',
+]);
+const STREET_SUFFIX_RE = /\b(st|street|ave|avenue|rd|road|dr|drive|ln|lane|blvd|boulevard|pkwy|parkway|hwy|highway|way|circle|cir|court|ct|place|pl|terrace|trl|trail|loop|run|row|square|sq)\b/i;
+
+/**
+ * Strip trailing city/state from a normalized address for structural checks.
+ */
+function addressCorePart(address) {
+  let core = String(address || '').trim();
+  core = core.replace(new RegExp(`,\\s*${escapeRegExp(GEOCODING_STATE)}\\s*$`, 'i'), '').trim();
+  core = core.replace(new RegExp(`,\\s*${escapeRegExp(GEOCODING_CITY)}\\s*$`, 'i'), '').trim();
+  // Drop any other trailing ", City" segments the model may have added.
+  const parts = core.split(',').map((p) => p.trim()).filter(Boolean);
+  if (parts.length > 1) core = parts[0];
+  return core.trim();
+}
+
+/**
+ * Reject LLM output that is only numbers, timing references, or lacks a real street/place.
+ */
+function looksLikePlausibleAddress(address) {
+  const core = addressCorePart(address);
+  if (!core) return false;
+
+  // Bare numbers: "723", "723. 622", "723, 622"
+  if (/^\d{1,6}([.\s,]+\d{1,6})*$/.test(core)) return false;
+
+  // Intersections are valid even without a house number.
+  if (/\s&\s/.test(core) || /\band\b/i.test(core)) return true;
+
+  // House number + street suffix (e.g. "723 Main St", "300 Maple Dr")
+  if (/^\d{1,6}\s+.+/i.test(core) && STREET_SUFFIX_RE.test(core)) return true;
+
+  // Named place / POI with multiple words and no leading bare number.
+  const words = core.split(/\s+/).filter(Boolean);
+  if (words.length >= 2 && !/^\d{1,6}$/.test(words[0])) return true;
+
+  // House number + alphabetic street name without suffix ("7908 Cindy Lane" before normalization)
+  if (/^\d{1,6}\s+[a-z]{2,}/i.test(core)) {
+    const afterNum = words.slice(1);
+    if (afterNum.some((w) => /^[a-z]{3,}$/i.test(w) && !STREET_SUFFIX_WORDS.has(w.toLowerCase()))) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Anti-hallucination: at least one significant place/street word in the LLM output
+ * must appear in the original transcript (prevents inventing "Main St" for "723").
+ */
+function addressAnchoredInTranscript(address, transcript) {
+  const core = addressCorePart(address).toLowerCase();
+  const transcriptLower = String(transcript || '').toLowerCase();
+  if (!core || !transcriptLower) return false;
+
+  const tokens = core.split(/[^a-z0-9]+/i).filter((t) => t.length >= 3);
+  const placeWords = tokens.filter((t) => !STREET_SUFFIX_WORDS.has(t) && !/^\d+$/.test(t));
+
+  if (placeWords.length === 0) return false;
+
+  const matched = placeWords.filter((w) => transcriptLower.includes(w));
+  if (matched.length === 0) return false;
+
+  // Intersections: need evidence of two different street names in the transcript.
+  if (/\s&\s/.test(core) || /\band\b/.test(core)) {
+    const sides = core.split(/\s+(?:&|and)\s+/i);
+    if (sides.length >= 2) {
+      const sideHits = sides.map((side) => {
+        const sideWords = side.split(/[^a-z0-9]+/i)
+          .filter((t) => t.length >= 3 && !STREET_SUFFIX_WORDS.has(t) && !/^\d+$/.test(t));
+        return sideWords.some((w) => transcriptLower.includes(w));
+      });
+      return sideHits.filter(Boolean).length >= 2;
+    }
+  }
+
+  return true;
+}
+
+/**
+ * Low-level LLM call shared by extraction and verification. Returns trimmed text
+ * (with any <think> block stripped) or null on error/timeout. Honors AI_PROVIDER.
+ * @param {string} prompt
+ * @param {{maxTokens?: number, timeoutMs?: number}} [opts]
+ * @returns {Promise<string|null>}
+ */
+async function callLLM(prompt, opts = {}) {
+  const maxTokens = opts.maxTokens || 800;
+  const timeoutMs = opts.timeoutMs || (parseInt(process.env.AI_EXTRACT_TIMEOUT_MS, 10) || 30000);
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => {
+    logger.warn(`[Geocoding] AI request timed out after ${timeoutMs / 1000}s.`);
+    controller.abort();
+  }, timeoutMs);
+  try {
+    let text = '';
+    if (AI_PROVIDER.toLowerCase() === 'openai') {
+      if (!OPENAI_API_KEY) {
+        logger.error('[Geocoding] AI_PROVIDER is openai but OPENAI_API_KEY is not configured!');
+        return null;
+      }
+      const response = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${OPENAI_API_KEY}` },
+        body: JSON.stringify({
+          model: OPENAI_MODEL,
+          messages: [{ role: 'user', content: prompt }],
+          temperature: 0.1,
+          max_tokens: maxTokens,
+        }),
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        const errorBody = await response.text();
+        throw new Error(`OpenAI API error! status: ${response.status}. Body: ${errorBody}`);
+      }
+      const result = await response.json();
+      if (result.choices && result.choices.length > 0 && result.choices[0].message) {
+        text = result.choices[0].message.content.trim();
+      }
+    } else {
+      const response = await fetch(`${OLLAMA_URL}/api/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: OLLAMA_MODEL,
+          prompt,
+          stream: false,
+          think: false,
+          options: { temperature: 0, top_p: 0.1, num_predict: maxTokens },
+        }),
+        signal: controller.signal,
+      });
+      if (!response.ok) throw new Error(`Ollama API error! status: ${response.status}`);
+      const result = await response.json();
+      text = (result.response || '').trim();
+    }
+
+    // Strip reasoning-model <think> blocks (closed or truncated/open).
+    text = text.replace(/<think>[\s\S]*?<\/think>\s*/gi, '').trim();
+    const openThink = text.search(/<think>/i);
+    if (openThink >= 0) text = text.slice(0, openThink).trim();
+    return text;
+  } catch (error) {
+    if (error.name === 'AbortError') {
+      logger.error(`[Geocoding] AI request timed out: ${error.message}`);
+    } else {
+      logger.error(`[Geocoding] AI request failed: ${error.message}`);
+    }
+    return null;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+/**
+ * Second-pass sanity check: ask the LLM whether the extracted address is really the
+ * incident location described in the transcript. Defaults ON; disable with
+ * AI_VERIFY_ADDRESS=false. On error/timeout it fails OPEN (keeps the address) so a
+ * flaky AI never silently drops every plot.
+ * @param {string} address - The normalized address we're about to geocode.
+ * @param {string} transcript - The original transcript.
+ * @returns {Promise<boolean>} - true if the address should be kept.
+ */
+async function verifyAddressWithLLM(address, transcript) {
+  if (String(process.env.AI_VERIFY_ADDRESS || 'true').toLowerCase() === 'false') return true;
+
+  // Verify only the street/place part. The trailing city/state was likely
+  // auto-added to complete the address and usually isn't spoken in the
+  // transcript, so including it would cause false rejections.
+  const core = addressCorePart(address) || address;
+
+  const prompt = `You are checking whether a street/place was correctly extracted from a first-responder dispatch transcript.
+
+TRANSCRIPT:
+"${transcript}"
+
+EXTRACTED STREET/PLACE:
+"${core}"
+
+A city and state may have been added automatically to complete the address — IGNORE the city/state and judge only the street, intersection, or named place above.
+Answer NO if any of these are true:
+- The street/place name does NOT appear in the transcript (it was invented or hallucinated).
+- It is actually a unit number, radio code, ETA/time, signal report, patient age, callsign, or other number — not a real location.
+- The transcript contains no real street, intersection, or named place at all.
+Answer YES if the transcript mentions this street, intersection, or named place (even loosely) as a location.
+
+Respond with exactly one word: YES or NO.`;
+
+  const answer = await callLLM(prompt, { maxTokens: 200 });
+  if (answer === null) {
+    logger.warn(`[Geocoding] Address verification unavailable (AI error/timeout); keeping "${address}".`);
+    return true; // fail open
+  }
+  const verdict = answer.toUpperCase();
+  const isYes = /\bYES\b/.test(verdict) && !/\bNO\b/.test(verdict);
+  if (!isYes) {
+    logger.info(`[Geocoding] Verification rejected "${address}" for transcript snippet: "${String(transcript).slice(0, 120)}" (LLM said: "${answer.slice(0, 40)}")`);
+  } else {
+    logger.info(`[Geocoding] Verification passed for "${address}".`);
+  }
+  return isYes;
+}
+
 /**
  * Uses local LLM to extract and complete addresses from the full transcript. (remains the same)
  * @param {string} transcript - The full transcript text.
@@ -263,20 +474,29 @@ async function extractAddressWithLLM(transcript, town) {
 The transcript mixes radio codes, unit numbers, call types, and chatter together with the address — ignore the codes and find the location of the incident.
 
 What counts as a location: a street with a house number, an intersection of two streets, or a specific named place (mall, park, school, hospital, building).
-What does NOT count: bare numbers, unit IDs (e.g. "ALS-742", "Engine 7"), call types, or radio chatter with no street/place name.
+What does NOT count: bare numbers, unit IDs (e.g. "ALS-742", "Engine 7"), call types, ETA/timing phrases, signal-strength numbers, or radio chatter with no street/place name.
 
 Rules:
 - Normalize spelled-out or hyphenated house numbers ("7-9-0-8 Cindy Lane" -> "7908 Cindy Lane").
-- "Cross street X" / "cross of X" names the nearby cross street; the MAIN address is the street that has the house number.
-- Never invent a street that is not spoken in the transcript.
+- If a house number is present, output ONLY that one street (e.g. "7908 Cindy Lane"). Do NOT append the cross street.
+- "Cross street X", "cross of X", or a second street listed after the main one is just a nearby reference — IGNORE it and keep only the street that has the house number.
+- Use the "&" intersection format ONLY when there is NO house number and the location is genuinely described as the corner of two streets.
+- Never invent a street that is not spoken in the transcript. Every street/place word in your answer MUST appear in the transcript.
 - Only add ", ${GEOCODING_CITY}, ${GEOCODING_STATE}" to complete an address that has a street but no city. Never output the city/state alone.
 - Coverage counties: ${countiesString}.
 ${TARGET_CITIES.length ? `- Known cities/towns: ${TARGET_CITIES.join(', ')}. Prefer a city actually named in the transcript; otherwise pick the most likely one from this list.` : ''}
 
+Examples that are NOT locations (respond: No address found):
+- "I made time for 723. 622." (timing/ETA numbers, no street)
+- "Copy that, unit 5 responding, 10-4 received"
+- "Reference 7-9-0-8" (digits alone, no street name follows)
+- "723" or "723, ${GEOCODING_CITY}" (number without a street or place name)
+
 Formatting:
 - Full address: 123 Main St, ${GEOCODING_CITY}, ${GEOCODING_STATE}
 - Block ("300 block of Maple Dr") -> 300 Maple Dr, ${GEOCODING_CITY}, ${GEOCODING_STATE}
-- Intersection: use "&" between the two streets -> Main St & Oak Ave, ${GEOCODING_CITY}, ${GEOCODING_STATE}
+- Intersection (no house number only): use "&" between the two streets -> Main St & Oak Ave, ${GEOCODING_CITY}, ${GEOCODING_STATE}
+- Address WITH a house number plus a cross street -> keep only the numbered street. ("71003 Luttrell Lane, cross street Westchester Drive" -> 71003 Luttrell Lane, ${GEOCODING_CITY}, ${GEOCODING_STATE})
 
 Respond with ONLY the location on one line (for example: 7908 Cindy Lane, ${GEOCODING_CITY}, ${GEOCODING_STATE}), or exactly: No address found
 Do not wrap the answer in quotes and do not add any commentary.
@@ -723,6 +943,22 @@ async function extractAddress(transcript, talkGroupId, systemName) {
     extractedAddress += `, ${GEOCODING_STATE}`;
   }
   extractedAddress = extractedAddress.trim();
+
+  if (!looksLikePlausibleAddress(extractedAddress)) {
+    logger.info(`Rejected implausible LLM address (no street/place structure): "${extractedAddress}"`);
+    return null;
+  }
+  if (!addressAnchoredInTranscript(extractedAddress, transcript)) {
+    logger.info(`Rejected LLM address not anchored in transcript (possible hallucination): "${extractedAddress}"`);
+    return null;
+  }
+
+  // Second-pass LLM sanity check (does this address actually make sense for the
+  // transcript?). Catches subtle mistakes the structural checks above can't.
+  const verified = await verifyAddressWithLLM(extractedAddress, transcript);
+  if (!verified) {
+    return null;
+  }
 
   // LLM extraction log moved inside extractAddressWithLLM
   // logger.info(`Extracted Address for ID ${talkGroupId}: ${extractedAddress}`);
