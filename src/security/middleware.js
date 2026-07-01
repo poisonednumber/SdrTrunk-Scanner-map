@@ -64,6 +64,12 @@ function buildHelmet() {
     },
     crossOriginEmbedderPolicy: false,
     crossOriginResourcePolicy: { policy: 'cross-origin' },
+    // Helmet defaults to "no-referrer", which strips the Referer header from map
+    // tile requests. OpenStreetMap's tile usage policy now 403s any request that
+    // has no Referer (Firefox is strictest about this), so tiles fail to load.
+    // "strict-origin-when-cross-origin" sends only the origin (not the full path)
+    // to third parties over HTTPS — enough to satisfy OSM while staying private.
+    referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
   });
 }
 

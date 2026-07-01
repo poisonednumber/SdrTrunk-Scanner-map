@@ -834,10 +834,13 @@ function initMap() {
     });
 
     // Day layer using OpenStreetMap
+    // referrerPolicy sends the origin as Referer on tile requests; OSM's tile
+    // policy 403s requests with no Referer (breaks tiles in Firefox especially).
     dayLayer = L.tileLayer(appConfig.mapStyles.dayLayer, {
         attribution: appConfig.map.attribution,
         maxZoom: appConfig.map.maxZoom,
-        crossOrigin: true
+        crossOrigin: true,
+        referrerPolicy: 'strict-origin-when-cross-origin'
     });
 
     // Add CSS for dark mode tiles
@@ -866,6 +869,7 @@ function initMap() {
         attribution: appConfig.map.attribution,
         maxZoom: appConfig.map.maxZoom,
         crossOrigin: true,
+        referrerPolicy: 'strict-origin-when-cross-origin',
         className: 'dark-mode-tiles'
     });
 
@@ -873,13 +877,15 @@ function initMap() {
     const satelliteBase = L.tileLayer(appConfig.mapStyles.satelliteBaseLayer, {
         attribution: appConfig.map.attribution,
         maxZoom: appConfig.map.maxZoom,
-        crossOrigin: true
+        crossOrigin: true,
+        referrerPolicy: 'strict-origin-when-cross-origin'
     });
 
     const satelliteLabels = L.tileLayer(appConfig.mapStyles.satelliteLabelsLayer, {
         attribution: '&copy; <a href="https://openstreetmap.org">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
         maxZoom: appConfig.map.maxZoom,
-        crossOrigin: true
+        crossOrigin: true,
+        referrerPolicy: 'strict-origin-when-cross-origin'
     });
 
     satelliteLayer = L.layerGroup([satelliteBase, satelliteLabels]);
